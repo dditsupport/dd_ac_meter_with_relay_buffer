@@ -1,0 +1,44 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- AC energy meter: a round dial with tick marks and a power bolt. -->
+
+    <!-- Dial face -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,54 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0" />
+
+    <!-- Inner ring -->
+    <path
+        android:strokeColor="#16414E"
+        android:strokeWidth="2"
+        android:pathData="M54,54 m-26.5,0 a26.5,26.5 0 1,0 53,0 a26.5,26.5 0 1,0 -53,0" />
+
+    <!-- Dial tick marks (8 around the rim) -->
+    <group>
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M54,25 L54,29" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M74.5,33.5 L71.7,36.3" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M83,54 L79,54" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M74.5,74.5 L71.7,71.7" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M54,83 L54,79" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M33.5,74.5 L36.3,71.7" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M25,54 L29,54" />
+        <path android:strokeColor="#16414E" android:strokeWidth="2" android:strokeLineCap="round"
+              android:pathData="M33.5,33.5 L36.3,36.3" />
+    </group>
+
+    <!-- Power bolt (energy) -->
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M58,36 L43,57 L52,57 L48,72 L65,49 L56,49 Z" />
+</vector>
