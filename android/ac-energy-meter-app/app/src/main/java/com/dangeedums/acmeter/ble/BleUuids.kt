@@ -10,6 +10,10 @@ import java.util.UUID
 object BleUuids {
     val SERVICE         : UUID = UUID.fromString("5f12b3bc-8ef3-4b48-a971-f70a38f519ec")
 
+    // Access auth (HMAC-SHA256 challenge/response over the static BLE_PSK).
+    val AUTH_CHALLENGE  : UUID = UUID.fromString("4eadfb98-7a40-4aa1-b65c-92c461d02527")
+    val AUTH_RESPONSE   : UUID = UUID.fromString("0ce9edf3-d11d-4e84-9f55-fe5e943594d9")
+
     val DEVICE_INFO     : UUID = UUID.fromString("56c4fe7d-1c7d-4042-9547-6170ec5c243c")
     val SET_WALL_TIME   : UUID = UUID.fromString("b90e068f-8856-4cba-a043-841081fbd1a1")
     val BOOT_HISTORY    : UUID = UUID.fromString("d155756b-566e-4aa3-9fe5-c898f78fda8b")

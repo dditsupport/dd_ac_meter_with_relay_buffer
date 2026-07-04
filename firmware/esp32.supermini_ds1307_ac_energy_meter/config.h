@@ -163,6 +163,18 @@
 #define BLE_UUID_SERVER_CONFIG  "9478f8ff-cb2f-4447-8a2f-49791de6bc09"
 #define BLE_UUID_RELAY          "8c5a2e91-6f3d-4b27-9a1c-0e7d3f8b6a52"
 
+// ---------- BLE access auth (HMAC-SHA256 challenge/response) ----------
+// The app must prove it knows BLE_PSK before any other characteristic is
+// usable, which keeps generic BLE tools (e.g. nRF Connect) out. The key is
+// NEVER sent over BLE: the device issues a per-connection random nonce on the
+// Challenge characteristic, the app writes HMAC_SHA256(BLE_PSK, nonce) to the
+// Response characteristic, and the firmware verifies it. BLE_PSK is a static
+// compile-time secret (like DEVICE_TOKEN) so auth works even with no internet.
+// The Android app's BuildConfig.BLE_PSK MUST match this string exactly.
+#define BLE_UUID_AUTH_CHALLENGE "4eadfb98-7a40-4aa1-b65c-92c461d02527"
+#define BLE_UUID_AUTH_RESPONSE  "0ce9edf3-d11d-4e84-9f55-fe5e943594d9"
+#define BLE_PSK                 "49705412b4105495af9b3d25974605ebde7bd3fe0525d510f15c15ea75baef3c"
+
 // ---------- Files ----------
 #define LOG_PATH                "/log.csv"
 #define LOG_TMP_PATH            "/log.tmp"

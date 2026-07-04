@@ -15,6 +15,18 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // Static preshared key for the BLE access handshake. MUST match
+        // BLE_PSK in the firmware's config.h. Never sent over BLE (only the
+        // HMAC of a per-connection nonce is). Kept here rather than in source
+        // so it is trivially rotatable; note it is still recoverable from the
+        // built APK, so this is deterrence against generic BLE tools, not
+        // strong secrecy. Ideally injected from an untracked gradle property.
+        buildConfigField(
+            "String",
+            "BLE_PSK",
+            "\"49705412b4105495af9b3d25974605ebde7bd3fe0525d510f15c15ea75baef3c\"",
+        )
     }
 
     buildTypes {
@@ -38,6 +50,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
