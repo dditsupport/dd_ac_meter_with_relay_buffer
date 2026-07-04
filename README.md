@@ -55,12 +55,13 @@ lives in RAM, so a power-cycle returns the meter to its server config.
 ## Repository layout
 
 ```
-esp32.supermini_ds1307_ac_energy_meter/        ESP32-C3 Super Mini firmware (DS1307, no OLED)
-esp32.WROOM.DevKit.V1_SSD1306_ds3231_ac_energy_meter/  ESP32 WROOM DevKit V1 firmware (DS3231 + SSD1306 OLED)
-backend/                                       MilesWeb PHP + MySQL (planned, not yet built)
-android/                                       Companion app (planned, not yet built)
-docs/                                          Wiring, provisioning, future hardware notes
-tools/                                          Bench-test helpers (fake_ingest.py)
+firmware/                                             ESP32 Arduino sketches (one folder per board)
+  esp32.supermini_ds1307_ac_energy_meter/             ESP32-C3 Super Mini firmware (DS1307, no OLED)
+  esp32.WROOM.DevKit.V1_SSD1306_ds3231_ac_energy_meter/  ESP32 WROOM DevKit V1 firmware (DS3231 + SSD1306 OLED)
+backend/                                              MilesWeb PHP + MySQL (planned, not yet built)
+android/                                              Companion app (planned, not yet built)
+docs/                                                 Wiring, provisioning, future hardware notes
+tools/                                                Bench-test helpers (fake_ingest.py)
 ```
 
 Both firmware folders are self-contained Arduino sketches for the same
@@ -109,7 +110,7 @@ Quick path:
    ArduinoJson, NimBLE-Arduino, RTClib.
 2. Board: **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**, partition
    scheme: **No OTA (2MB APP/2MB SPIFFS)** (see `docs/PROVISIONING.md`).
-3. Open `esp32.supermini_ds1307_ac_energy_meter/ac_energy_meter.ino` and Upload.
+3. Open `firmware/esp32.supermini_ds1307_ac_energy_meter/ac_energy_meter.ino` and Upload.
 
 ## Bench-testing without a backend
 
@@ -119,7 +120,7 @@ Run the stub:
 python3 tools/fake_ingest.py --port 8080
 ```
 
-Point `INGEST_URL` in `esp32.supermini_ds1307_ac_energy_meter/config.h` at
+Point `INGEST_URL` in `firmware/esp32.supermini_ds1307_ac_energy_meter/config.h` at
 `http://<laptop-ip>:8080/ingest`, reflash, and the device will exercise its
 full sync path against the stub.
 

@@ -11,7 +11,7 @@ Usage:
     python3 tools/fake_ingest.py --token <token>   # require X-Device-Token
 
 Point the firmware at this server by editing INGEST_URL in
-esp32.supermini_ds1307_ac_energy_meter/config.h to:
+firmware/esp32.supermini_ds1307_ac_energy_meter/config.h to:
     http://<laptop-ip>:8080/ingest
 (use http, not https, for the stub).
 """
