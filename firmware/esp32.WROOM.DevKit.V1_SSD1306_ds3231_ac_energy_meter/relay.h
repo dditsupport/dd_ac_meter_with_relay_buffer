@@ -2,16 +2,28 @@
 
 #include <Arduino.h>
 
-// Server-controlled relay output. The server pushes a schedule in each
-// ingest.php response:
-//   { "relay_version": <int>, "relay_schedule": [ {days:[0..6], on:"HH:MM", off:"HH:MM"}, ... ] }
-// The schedule is cached in NVS so the relay keeps switching during a
-// Wi-Fi outage. evaluate() is called every loop tick (~50 ms) and drives
-// the GPIO based on the current local time + cached schedule. With no
-// schedule cached the relay stays off.
+// Off-hours AC-cutoff relay. Fail-safe NC wiring: DE-ENERGIZED = AC powered
+// (open hours), ENERGIZED = AC cut (off hours). A dead controller therefore
+// leaves the AC on.
+//
+// The server pushes, per device, in each ingest.php response:
+//   { "relay_version": <int>,
+//     "relay_schedule": [ {days:[0..6], on:"HH:MM", off:"HH:MM"}, ... ],  // AC-ALLOWED open hours
+//     "relay_compressor_watts": <int>,   // compressor "is-running" threshold
+//     "relay_grace_min": <int> }         // minutes to wait for compressor idle before cutting
+// All three are cached in NVS so cutoff keeps working during a Wi-Fi outage.
+// With no schedule cached the relay stays de-energized (AC on) — fail-safe for
+// an unconfigured device.
+//
+// tick() runs every loop tick (~50 ms) and drives the GPIO from a small state
+// machine: outside the open-hours window it waits for the compressor to cycle
+// off (wattage < threshold) before energizing to cut, hard-cutting at the
+// grace deadline; if the AC is already idle at closing it never cuts. update_
+// power() feeds it the latest PZEM wattage at 1 Hz.
 //
 // The Android app can also take manual control over BLE (see Mode below):
-// FORCE_ON / FORCE_OFF override the schedule until set back to AUTO.
+// FORCE_ON (energize = cut) / FORCE_OFF (de-energize = AC on) override the
+// schedule until set back to AUTO.
 
 namespace relay {
 
@@ -26,10 +38,17 @@ enum class Mode : uint8_t { AUTO = 0, FORCE_ON = 1, FORCE_OFF = 2 };
 
 void begin();
 
-// Apply a freshly-fetched schedule. Caller passes the parsed JSON array
-// as a string. Compares against the stored version; persists + reapplies
-// on change. Pass empty array to clear.
-void apply(uint32_t version, const String &schedule_json_array);
+// Apply a freshly-fetched relay config. Caller passes the parsed schedule
+// (AC-allowed open hours) as a JSON-array string, plus the compressor watt
+// threshold and grace minutes. Compares against stored values; persists +
+// re-evaluates on change. Pass an empty array to clear the schedule; pass 0
+// for compressor_watts / grace_min to leave those unchanged.
+void apply(uint32_t version, const String &schedule_json_array,
+           uint32_t compressor_watts, uint32_t grace_min);
+
+// Feed the latest PZEM wattage (called at 1 Hz from the sampler). `valid` is
+// false when the PZEM read failed, so the state machine ignores stale power.
+void update_power(float watts, bool valid);
 
 // Last version we accepted. Firmware sends this back so the server can
 // short-circuit on no-change later if it wants to. Currently informational.

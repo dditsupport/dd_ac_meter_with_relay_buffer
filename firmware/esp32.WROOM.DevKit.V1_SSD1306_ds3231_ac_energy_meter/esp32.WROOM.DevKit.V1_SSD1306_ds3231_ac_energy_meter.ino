@@ -306,6 +306,9 @@ static void sampling_task(void *) {
       state_unlock();
     }
 
+    // Feed the relay's compressor-aware cutoff with the latest wattage.
+    relay::update_power(sample.power, ok);
+
     // Render OLED from a snapshot (no I/O under lock).
     display::tick();
 

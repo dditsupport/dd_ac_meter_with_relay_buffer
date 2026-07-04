@@ -68,7 +68,11 @@ Both firmware folders are self-contained Arduino sketches for the same
 meter; pick the one that matches your hardware. The `.supermini` build
 targets the ESP32-C3 Super Mini with a DS1307 RTC and no display; the
 `.WROOM.DevKit.V1` build targets the ESP32 WROOM DevKit V1 with a DS3231
-RTC and an SSD1306 OLED. They are kept separate, not merged.
+RTC and an SSD1306 OLED. They are kept separate, not merged, but track the
+same firmware version and feature set — both are now `FW_VERSION` **2.0.0**
+with the compressor-aware, fail-safe NC AC-cutoff relay (AC-allowed open-hours
+schedule; energize = cut). The only differences are the hardware bits: pin
+map, RTC part (DS1307 vs DS3231), and the WROOM build's OLED.
 
 ## How fast does data reach the cloud?
 
