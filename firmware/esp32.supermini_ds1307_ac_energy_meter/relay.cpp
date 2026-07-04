@@ -26,13 +26,15 @@ static bool  s_power_valid    = false;
 
 // Cutoff state machine (per off-hours period).
 //   ALLOWED       - inside open hours: de-energized (AC on).
-//   MONITORING    - off hours, watching whether the AC was left running.
-//   WAIT_FOR_IDLE - AC left running; de-energized, waiting for the compressor
-//                   to cycle off before cutting.
-//   IDLE_DONE     - AC deemed already-off at closing; stay de-energized.
+//   MONITORING    - off hours, waiting out the grace window. If the compressor
+//                   is running the cut is deferred (WAIT_FOR_IDLE) to avoid
+//                   opening under load; if it is idle we cut at the grace
+//                   deadline.
+//   WAIT_FOR_IDLE - AC running; de-energized, waiting for the compressor to
+//                   cycle off (or the grace deadline) before cutting.
 //   CUT_LATCHED   - relay energized (AC cut) and latched for the rest of the
 //                   off-hours period (PZEM now reads ~0, must not re-open).
-enum class SmState : uint8_t { ALLOWED, MONITORING, WAIT_FOR_IDLE, IDLE_DONE, CUT_LATCHED };
+enum class SmState : uint8_t { ALLOWED, MONITORING, WAIT_FOR_IDLE, CUT_LATCHED };
 static SmState  s_sm            = SmState::ALLOWED;
 static uint64_t s_offhours_us   = 0;   // monotonic-us when off hours began
 
@@ -53,7 +55,6 @@ static const char *sm_str(SmState s) {
   switch (s) {
     case SmState::MONITORING:    return "monitoring";
     case SmState::WAIT_FOR_IDLE: return "wait_idle";
-    case SmState::IDLE_DONE:     return "idle_done";
     case SmState::CUT_LATCHED:   return "cut";
     default:                     return "allowed";
   }
@@ -281,10 +282,9 @@ void tick() {
     case SmState::MONITORING:
       if (running) {
         s_sm = SmState::WAIT_FOR_IDLE;
-        LOG_PRINTLN("[relay] AC left running — waiting for compressor to cycle off");
+        LOG_PRINTLN("[relay] AC running — waiting for compressor to cycle off before cutting");
       } else if (grace_elapsed) {
-        s_sm = SmState::IDLE_DONE;   // AC already off at closing; nothing to cut
-        LOG_PRINTLN("[relay] AC idle through grace window — no cut needed");
+        cut_and_latch("idle through grace");   // cut and hold until open hours
       }
       break;
 
@@ -300,7 +300,6 @@ void tick() {
       if (!s_state) write_pin(true);   // hold cut (defensive)
       break;
 
-    case SmState::IDLE_DONE:
     default:
       break;   // stay de-energized until open hours resume
   }
