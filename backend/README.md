@@ -75,7 +75,7 @@ backend/
    `public_html/_config/secrets.php` and fill in DB creds + token. Point the
    DB creds at the **shared WorkPulse database** (the one holding `locations`
    and the `ed_*` tables). The `DEVICE_TOKEN` value must match
-   `firmware/ac_energy_meter/config.h`.
+   `esp32.supermini_ds1307_ac_energy_meter/config.h`.
 
 3. **Upload** — drop the contents of `public_html/` into your hosting's
    `public_html/` (so the URLs end up at e.g. `https://aromen.biz/meter/...`).
@@ -175,7 +175,7 @@ Everything runs in `APP_TIMEZONE` (default `Asia/Kolkata`, IST/+05:30):
   the backend `APP_TIMEZONE`. Keep the two in sync if you change region.
 
 To run in a different zone, change `APP_TIMEZONE` in `secrets.php` **and**
-`TZ_INFO` in `firmware/ac_energy_meter/config.h`.
+`TZ_INFO` in `esp32.supermini_ds1307_ac_energy_meter/config.h`.
 
 ## Heartbeat POSTs
 
