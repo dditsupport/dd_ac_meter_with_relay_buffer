@@ -203,7 +203,8 @@ $locations = $pdo->query(
       <legend>Compressor-aware cutoff</legend>
       <p class="muted" style="margin:0 0 0.5rem">
         At closing the relay waits for the compressor to cycle off before cutting, so it never opens
-        under load. If wattage stays below the threshold the AC is treated as already off (no cut).
+        under load. It cuts by the grace deadline at the latest, then stays cut until the next
+        open-hours start.
       </p>
       <label>Compressor threshold (W)
         <input type="number" id="relay-cw" min="100" max="10000" step="50" value="800">

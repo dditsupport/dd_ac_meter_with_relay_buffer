@@ -137,8 +137,8 @@
 #define RELAY_ACTIVE_HIGH       1
 
 // Compressor "is-running" watt threshold: below it the compressor is off, so
-// cutting is safe (and if it stays below all through the grace window at
-// closing, the AC is deemed already-off and we don't cut at all).
+// cutting is safe. While wattage stays at/above it the cut is deferred (waiting
+// for the compressor to cycle off) until the grace deadline.
 #define RELAY_COMPRESSOR_WATTS_DEFAULT  800     // ~1.5-2 ton compressor floor
 #define RELAY_COMPRESSOR_WATTS_MIN      100
 #define RELAY_COMPRESSOR_WATTS_MAX      10000

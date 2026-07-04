@@ -170,7 +170,8 @@ Everything runs in `APP_TIMEZONE` (default `Asia/Kolkata`, IST/+05:30):
   **AC-allowed open hours**, and the firmware energizes the relay (fail-safe
   NC — energize = cut) to switch the AC off *outside* them. It never opens
   under compressor load: it waits for wattage to drop below `compressor_watts`,
-  hard-cutting only after `grace_min` minutes. Schedule times (HH:MM) are
+  cutting by `grace_min` minutes after closing at the latest, then holding the
+  cut until the next open-hours start. Schedule times (HH:MM) are
   interpreted by the firmware in its own `TZ_INFO` (`IST-5:30`), which matches
   the backend `APP_TIMEZONE`. Keep the two in sync if you change region.
 
