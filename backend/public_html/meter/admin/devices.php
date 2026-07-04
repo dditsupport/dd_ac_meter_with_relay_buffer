@@ -42,41 +42,43 @@ $locations = $pdo->query(
 <title>AC Energy Meter — devices</title>
 <link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
 <style>
-  /* Per-column sizing for the devices admin grid. The table can be wider than
-     the viewport — parent .card.scroll-x handles horizontal overflow. */
-  table.devices            { table-layout: auto; min-width: 920px; }
-  table.devices td input,
-  table.devices td select  { width: 100%; box-sizing: border-box; }
-  table.devices .col-id    { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-                             font-size: 0.82rem; white-space: nowrap; }
-  /* Min-widths so user-typed text isn't truncated mid-word. */
-  table.devices input.name     { min-width: 9rem; }
-  table.devices select.location { min-width: 8rem; }
-  table.devices select.owner   { min-width: 8rem; }
-  table.devices .col-cap   input { width: 5rem; min-width: 5rem; }
-  table.devices .col-int   { white-space: nowrap; }
-  table.devices .col-int   input  { width: 5.5rem; min-width: 5.5rem; display: inline-block; }
-  table.devices .col-int   button { margin-left: 0.35rem; }
-  table.devices .col-meta  { white-space: nowrap; color: var(--muted); font-size: 0.82rem; }
-  table.devices .col-rows  { text-align: right; font-variant-numeric: tabular-nums; }
-  table.devices .col-relay { white-space: nowrap; font-size: 0.85rem; }
+  /* Devices as compact 2-line cards — everything fits the viewport width by
+     wrapping, so there is no left/right scrolling. */
+  .dev-list { display: flex; flex-direction: column; gap: 0.55rem; }
+  .dev      { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; background: #fff; }
+  .dev:nth-child(even) { background: #fafbf8; }
+  .dev-row  { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: flex-end; }
+  .dev-row.line2 { margin-top: 0.55rem; padding-top: 0.55rem; border-top: 1px dashed var(--border);
+                   align-items: center; }
+  .field    { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+  .field > .lbl { font-size: 0.66rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .field input, .field select { box-sizing: border-box; width: 100%; }
+  .dev .f-id       { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                     font-size: 0.82rem; white-space: nowrap; align-self: center; }
+  .dev .f-name     { flex: 1 1 10rem; }
+  .dev .f-location { flex: 3 1 18rem; }   /* location gets the most room */
+  .dev .f-cap      { flex: 0 0 5rem; }
+  .dev .f-owner    { flex: 1 1 9rem; }
+  .dev .f-interval { flex: 0 0 auto; }
+  .dev .f-interval .iwrap { display: flex; gap: 0.3rem; }
+  .dev .f-interval input   { width: 5.5rem; }
+  .dev-meta { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+  .dev-meta b { color: var(--text); font-weight: 600; }
   .relay-dot { display: inline-block; width: 0.62rem; height: 0.62rem; border-radius: 50%;
                margin-right: 0.4rem; vertical-align: middle; background: #c8ccc4; }
   .relay-dot.on      { background: #1f9d3a; box-shadow: 0 0 0 3px rgba(31,157,58,0.18); }
   .relay-dot.off     { background: #98a09a; }
   .relay-dot.stale   { background: #d8a200; }
   .relay-dot.unknown { background: #c8ccc4; }
-  table.devices .col-relay .relay-label { color: var(--muted); vertical-align: middle; }
-  table.devices .col-relay .relay-warn  { margin-left: 0.4rem; color: #b8860b; cursor: help;
-                                          font-size: 0.95rem; vertical-align: middle; }
-  table.devices .col-pin   { white-space: nowrap; }
-  table.devices .col-pin code.pin { font-size: 0.95rem; letter-spacing: 0.06em; }
-  table.devices .col-pin .regen-pin { margin-left: 0.4rem; padding: 0.1rem 0.45rem; font-size: 0.9rem; }
-  table.devices .actions   { white-space: nowrap; display: flex; gap: 0.5rem; align-items: center; }
-  table.devices .actions a { font-size: 0.85rem; }
-  /* Visual grouping: zebra stripe + breathing room */
-  table.devices tbody tr:nth-child(odd) td { background: #fafbf8; }
-  table.devices td, table.devices th { padding: 0.55rem 0.6rem; vertical-align: middle; }
+  .col-relay { white-space: nowrap; font-size: 0.85rem; color: var(--muted); }
+  .col-relay .relay-label { color: var(--text); vertical-align: middle; }
+  .col-relay .relay-warn  { margin-left: 0.4rem; color: #b8860b; cursor: help;
+                            font-size: 0.95rem; vertical-align: middle; }
+  .dev-pin { white-space: nowrap; font-size: 0.8rem; color: var(--muted); }
+  .dev-pin code.pin { font-size: 0.95rem; letter-spacing: 0.06em; color: var(--text); }
+  .dev-pin .regen-pin { margin-left: 0.3rem; padding: 0.1rem 0.45rem; font-size: 0.9rem; }
+  .dev-actions { margin-left: auto; display: flex; gap: 0.4rem; align-items: center; }
+  .dev-actions a { font-size: 0.85rem; }
 </style>
 </head><body>
 <header class="topbar">
@@ -88,27 +90,12 @@ $locations = $pdo->query(
   </div>
 </header>
 <main class="container">
-  <section class="card scroll-x">
+  <section class="card">
     <h2>Devices</h2>
     <p class="muted">Devices auto-register on first ingest POST. Assign each one to a user below.
        A <span style="color:#b8860b">⚠</span> in the Relay column means the device's firmware
        predates v2.0.0 and would <b>cut the AC during open hours</b> — flash &ge; 2.0.0.</p>
-    <table class="grid devices">
-      <thead><tr>
-        <th>Device ID</th>
-        <th>Friendly name</th>
-        <th>Location</th>
-        <th>kW</th>
-        <th>Owner</th>
-        <th>Interval&nbsp;(s)</th>
-        <th>Last sync</th>
-        <th>FW</th>
-        <th class="col-rows">Rows</th>
-        <th>Relay</th>
-        <th>BLE&nbsp;PIN</th>
-        <th></th>
-      </tr></thead>
-      <tbody>
+    <div class="dev-list">
       <?php foreach ($devices as $d):
         // Old-convention warning: firmware < $RELAY_CONV_FW energizes the relay
         // INSIDE the schedule window, so a schedule on it cuts the AC during
@@ -119,68 +106,67 @@ $locations = $pdo->query(
         $schedSet  = $schedJson !== '' && trim($schedJson) !== '[]';
         $relayRisk = $fwOld && $schedSet;
       ?>
-        <tr data-id="<?= h($d['device_id']) ?>" data-fw-old="<?= $relayRisk ? '1' : '' ?>">
-          <td class="col-id"><?= h($d['device_id']) ?></td>
-          <td><input class="name"     value="<?= h($d['friendly_name']) ?>"></td>
-          <td>
-            <select class="location">
-              <option value="">— none —</option>
-              <?php foreach ($locations as $loc): ?>
-                <option value="<?= (int)$loc['location_id'] ?>"
-                  <?= (int)($d['location'] ?? 0) === (int)$loc['location_id'] ? 'selected' : '' ?>>
-                  <?= h($loc['location_name']) ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
-          </td>
-          <td class="col-cap">
-            <input class="capacity" type="number" step="0.01" min="0" placeholder="—"
-                   value="<?= h((string)($d['capacity_kw'] ?? '')) ?>">
-          </td>
-          <td>
-            <select class="owner">
-              <option value="">— unassigned —</option>
-              <?php foreach ($users as $u): ?>
-                <option value="<?= (int)$u['id'] ?>"
-                  <?= $u['id'] == ($d['owner_user_id'] ?? -1) ? 'selected' : '' ?>>
-                  <?= h($u['username']) ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
-          </td>
-          <td class="col-int">
-            <input class="interval" type="number" min="60" max="86400" step="1"
-                   value="<?= (int)($d['log_interval_sec'] ?? 900) ?>">
-            <button class="set-interval">Set</button>
-          </td>
-          <td class="col-meta"><?= h((string)($d['last_sync_at'] ?? '—')) ?></td>
-          <td class="col-meta"><?= h((string)($d['fw_version'] ?? '—')) ?></td>
-          <td class="col-rows"><?= number_format((int)($d['total_readings'] ?? 0)) ?></td>
-          <td class="col-relay"
-              data-on="<?= array_key_exists('relay_on', $d) && $d['relay_on'] !== null ? (int)$d['relay_on'] : '' ?>"
-              data-mode="<?= h((string)($d['relay_mode'] ?? '')) ?>"
-              data-at="<?= h((string)($d['relay_reported_at'] ?? '')) ?>"
-              data-int="<?= (int)($d['log_interval_sec'] ?? 900) ?>">
-            <span class="relay-dot unknown"></span><span class="relay-label">—</span>
-            <?php if ($relayRisk): ?>
-              <span class="relay-warn"
-                    title="Firmware <?= h($fw ?: '?') ?> uses the old relay convention — this schedule CUTS the AC during open hours. Flash &ge; <?= h($RELAY_CONV_FW) ?>.">⚠</span>
-            <?php endif; ?>
-          </td>
-          <td class="col-pin">
-            <code class="pin"><?= h((string)($d['ble_pin'] ?? '—')) ?></code>
-            <button class="regen-pin" title="Generate a new BLE PIN">↻</button>
-          </td>
-          <td class="actions">
-            <button class="rename">Save</button>
-            <button class="relay">Relay</button>
-            <a href="/meter/dashboard/?device_id=<?= urlencode($d['device_id']) ?>">view</a>
-            <button class="danger delete-device">Delete</button>
-          </td>
-        </tr>
+        <div class="dev" data-id="<?= h($d['device_id']) ?>" data-fw-old="<?= $relayRisk ? '1' : '' ?>">
+          <div class="dev-row line1">
+            <span class="f-id" title="Device ID"><?= h($d['device_id']) ?></span>
+            <label class="field f-name"><span class="lbl">Friendly name</span>
+              <input class="name" value="<?= h($d['friendly_name']) ?>"></label>
+            <label class="field f-location"><span class="lbl">Location</span>
+              <select class="location">
+                <option value="">— none —</option>
+                <?php foreach ($locations as $loc): ?>
+                  <option value="<?= (int)$loc['location_id'] ?>"
+                    <?= (int)($d['location'] ?? 0) === (int)$loc['location_id'] ? 'selected' : '' ?>>
+                    <?= h($loc['location_name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select></label>
+            <label class="field f-cap"><span class="lbl">kW</span>
+              <input class="capacity" type="number" step="0.01" min="0" placeholder="—"
+                     value="<?= h((string)($d['capacity_kw'] ?? '')) ?>"></label>
+            <label class="field f-owner"><span class="lbl">Owner</span>
+              <select class="owner">
+                <option value="">— unassigned —</option>
+                <?php foreach ($users as $u): ?>
+                  <option value="<?= (int)$u['id'] ?>"
+                    <?= $u['id'] == ($d['owner_user_id'] ?? -1) ? 'selected' : '' ?>>
+                    <?= h($u['username']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select></label>
+          </div>
+          <div class="dev-row line2">
+            <label class="field f-interval"><span class="lbl">Interval (s)</span>
+              <span class="iwrap">
+                <input class="interval" type="number" min="60" max="86400" step="1"
+                       value="<?= (int)($d['log_interval_sec'] ?? 900) ?>">
+                <button class="set-interval">Set</button>
+              </span></label>
+            <span class="dev-meta">Sync: <b><?= h((string)($d['last_sync_at'] ?? '—')) ?></b></span>
+            <span class="dev-meta">FW: <b><?= h((string)($d['fw_version'] ?? '—')) ?></b></span>
+            <span class="dev-meta">Rows: <b><?= number_format((int)($d['total_readings'] ?? 0)) ?></b></span>
+            <span class="col-relay"
+                  data-on="<?= array_key_exists('relay_on', $d) && $d['relay_on'] !== null ? (int)$d['relay_on'] : '' ?>"
+                  data-mode="<?= h((string)($d['relay_mode'] ?? '')) ?>"
+                  data-at="<?= h((string)($d['relay_reported_at'] ?? '')) ?>"
+                  data-int="<?= (int)($d['log_interval_sec'] ?? 900) ?>">
+              Relay: <span class="relay-dot unknown"></span><span class="relay-label">—</span>
+              <?php if ($relayRisk): ?>
+                <span class="relay-warn"
+                      title="Firmware <?= h($fw ?: '?') ?> uses the old relay convention — this schedule CUTS the AC during open hours. Flash &ge; <?= h($RELAY_CONV_FW) ?>.">⚠</span>
+              <?php endif; ?>
+            </span>
+            <span class="dev-pin">PIN: <code class="pin"><?= h((string)($d['ble_pin'] ?? '—')) ?></code><button class="regen-pin" title="Generate a new BLE PIN">↻</button></span>
+            <span class="dev-actions">
+              <button class="rename">Save</button>
+              <button class="relay">Relay</button>
+              <a href="/meter/dashboard/?device_id=<?= urlencode($d['device_id']) ?>">view</a>
+              <button class="danger delete-device">Delete</button>
+            </span>
+          </div>
+        </div>
       <?php endforeach; ?>
-      </tbody>
-    </table>
+    </div>
   </section>
 </main>
 
@@ -265,13 +251,13 @@ async function post(action, fields){
 }
 
 document.querySelectorAll('select.owner').forEach(sel => sel.addEventListener('change', async () => {
-  const tr = sel.closest('tr');
+  const tr = sel.closest('.dev');
   const r  = await post('bind', { device_id: tr.dataset.id, user_id: sel.value || '' });
   if (!r.ok) alert('Error: ' + r.error);
 }));
 
 document.querySelectorAll('button.rename').forEach(btn => btn.addEventListener('click', async () => {
-  const tr = btn.closest('tr');
+  const tr = btn.closest('.dev');
   const r  = await post('rename', {
     device_id:     tr.dataset.id,
     friendly_name: tr.querySelector('.name').value,
@@ -282,7 +268,7 @@ document.querySelectorAll('button.rename').forEach(btn => btn.addEventListener('
 }));
 
 document.querySelectorAll('button.set-interval').forEach(btn => btn.addEventListener('click', async () => {
-  const tr = btn.closest('tr');
+  const tr = btn.closest('.dev');
   const r  = await post('set_interval', {
     device_id: tr.dataset.id,
     log_interval_sec: tr.querySelector('.interval').value,
@@ -291,7 +277,7 @@ document.querySelectorAll('button.set-interval').forEach(btn => btn.addEventList
 }));
 
 document.querySelectorAll('button.delete-device').forEach(btn => btn.addEventListener('click', async () => {
-  const tr = btn.closest('tr');
+  const tr = btn.closest('.dev');
   if (!confirm('Delete this device and ALL its readings? This cannot be undone.')) return;
   const r = await post('delete', { device_id: tr.dataset.id });
   if (!r.ok) { alert('Error: ' + r.error); return; }
@@ -299,7 +285,7 @@ document.querySelectorAll('button.delete-device').forEach(btn => btn.addEventLis
 }));
 
 document.querySelectorAll('button.regen-pin').forEach(btn => btn.addEventListener('click', async () => {
-  const tr = btn.closest('tr');
+  const tr = btn.closest('.dev');
   if (!confirm('Generate a new BLE PIN? The old PIN stops working; the device owner must re-enter the new one in the app after their next login.')) return;
   const r = await post('regen_pin', { device_id: tr.dataset.id });
   if (!r.ok) { alert('Error: ' + r.error); return; }
@@ -394,7 +380,7 @@ function collectWindows() {
 }
 
 document.querySelectorAll('button.relay').forEach(btn => btn.addEventListener('click', async () => {
-  const tr = btn.closest('tr');
+  const tr = btn.closest('.dev');
   currentDev = tr.dataset.id;
   dlgDevEl.textContent = currentDev;
   // Warn if this device's firmware predates the AC-allowed-hours convention.
@@ -464,7 +450,7 @@ function stateFromCell(cell) {
     interval: parseInt(cell.dataset.int || '900', 10),
   };
 }
-document.querySelectorAll('td.col-relay').forEach(cell => renderRelayCell(cell, stateFromCell(cell)));
+document.querySelectorAll('.col-relay').forEach(cell => renderRelayCell(cell, stateFromCell(cell)));
 
 async function refreshRelayStates() {
   let j;
@@ -474,9 +460,9 @@ async function refreshRelayStates() {
   for (const s of j.states) {
     byId[s.device_id] = { on: s.relay_on, mode: s.relay_mode, at: s.reported_at, interval: s.interval };
   }
-  document.querySelectorAll('tr[data-id]').forEach(tr => {
-    const cell = tr.querySelector('td.col-relay');
-    if (cell) renderRelayCell(cell, byId[tr.dataset.id] ?? null);
+  document.querySelectorAll('.dev[data-id]').forEach(dev => {
+    const cell = dev.querySelector('.col-relay');
+    if (cell) renderRelayCell(cell, byId[dev.dataset.id] ?? null);
   });
 }
 refreshRelayStates();
