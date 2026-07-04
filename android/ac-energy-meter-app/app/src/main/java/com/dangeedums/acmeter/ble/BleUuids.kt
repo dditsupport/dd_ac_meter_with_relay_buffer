@@ -4,7 +4,7 @@ import java.util.UUID
 
 /**
  * BLE GATT layout for the AC Energy Meter firmware. Must stay in sync with
- * firmware/ac_energy_meter/config.h. Generated UUIDs are kept opaque — they have
+ * esp32.supermini_ds1307_ac_energy_meter/config.h. Generated UUIDs are kept opaque — they have
  * no semantic meaning beyond uniqueness.
  */
 object BleUuids {

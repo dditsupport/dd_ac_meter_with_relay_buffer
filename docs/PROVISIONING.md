@@ -44,7 +44,7 @@ LittleFS, WiFi, HTTPClient, WiFiClientSecure, and Preferences are built in.
 
 ## 2. Flash
 
-1. Open `firmware/ac_energy_meter/ac_energy_meter.ino` in Arduino IDE.
+1. Open `esp32.supermini_ds1307_ac_energy_meter/ac_energy_meter.ino` in Arduino IDE.
 2. Set board to **ESP32C3 Dev Module**, with **USB CDC On Boot: Enabled**
    and the partition scheme as above.
 3. Verify the `INGEST_URL` and `DEVICE_TOKEN` macros in `config.h`. The
