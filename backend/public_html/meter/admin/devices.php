@@ -13,6 +13,7 @@ $base_cols  = 'd.device_id, d.friendly_name, d.location, l.location_name, d.capa
                m.fw_version, m.last_sync_at, m.last_seq, m.last_boot_id,
                m.total_readings, m.log_interval_sec';
 $opt_relay  = ', m.relay_on, m.relay_mode, m.relay_reported_at';
+$opt_drift  = ', m.rtc_drift_sec, m.rtc_drift_at';
 $opt_pin    = ', d.ble_pin';
 $from       = ' FROM ed_energy_devices d
                 LEFT JOIN ed_users               u ON u.id = d.owner_user_id
@@ -26,7 +27,7 @@ $from       = ' FROM ed_energy_devices d
 // AC during business hours), so we warn if such a device has a schedule set.
 $RELAY_CONV_FW = '2.0.0';
 $devices = [];
-foreach ([$opt_pin . $opt_relay, $opt_relay, $opt_pin, ''] as $extra) {
+foreach ([$opt_pin . $opt_relay . $opt_drift, $opt_pin . $opt_relay, $opt_relay, $opt_pin, ''] as $extra) {
     try { $devices = $pdo->query("SELECT $base_cols $extra $from")->fetchAll(); break; }
     catch (Throwable $e) { /* missing column — try a leaner select */ }
 }
@@ -145,6 +146,9 @@ $locations = $pdo->query(
             <span class="dev-meta">Sync: <b><?= h((string)($d['last_sync_at'] ?? '—')) ?></b></span>
             <span class="dev-meta">FW: <b><?= h((string)($d['fw_version'] ?? '—')) ?></b></span>
             <span class="dev-meta">Rows: <b><?= number_format((int)($d['total_readings'] ?? 0)) ?></b></span>
+            <?php if (isset($d['rtc_drift_sec']) && $d['rtc_drift_sec'] !== null): ?>
+              <span class="dev-meta" title="DS1307 vs NTP at <?= h((string)($d['rtc_drift_at'] ?? '')) ?> IST — positive = RTC running fast">RTC drift: <b><?= ((int)$d['rtc_drift_sec'] > 0 ? '+' : '') . (int)$d['rtc_drift_sec'] ?>s</b></span>
+            <?php endif; ?>
             <span class="col-relay"
                   data-on="<?= array_key_exists('relay_on', $d) && $d['relay_on'] !== null ? (int)$d['relay_on'] : '' ?>"
                   data-mode="<?= h((string)($d['relay_mode'] ?? '')) ?>"

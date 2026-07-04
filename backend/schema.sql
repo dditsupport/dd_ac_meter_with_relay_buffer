@@ -61,6 +61,22 @@ CREATE TABLE IF NOT EXISTS ed_device_meta (
   relay_on          TINYINT(1)  NULL,
   relay_mode        VARCHAR(8)  NULL,   -- 'auto' | 'on' | 'off'
   relay_reported_at TIMESTAMP   NULL,
+  -- Latest DS1307 drift (signed sec, + = RTC fast) and when it was measured.
+  rtc_drift_sec     INT         NULL,
+  rtc_drift_at      DATETIME    NULL,
+  FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ---------------- ed_rtc_drift_log ----------------
+-- One row per hourly NTP sync: how far the DS1307 had drifted from true time.
+CREATE TABLE IF NOT EXISTS ed_rtc_drift_log (
+  id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  device_id   VARCHAR(32) NOT NULL,
+  measured_at DATETIME    NOT NULL,   -- NTP time at the sync
+  drift_sec   INT         NOT NULL,   -- signed; + = RTC ahead of true time
+  received_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_dev_measured (device_id, measured_at),
+  KEY idx_dev_time (device_id, measured_at),
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

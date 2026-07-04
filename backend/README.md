@@ -64,9 +64,12 @@ backend/
 
    The `migrations/` files (001–005) are historical, written against the old
    un-prefixed standalone schema; on the shared DB use `schema.sql` (which
-   already includes every column those migrations added). aromen.biz/meter
-   posts readings and renders its graphs from these tables as before; the
-   WorkPulse app reads the same rows filtered by `location`.
+   already includes every column those migrations added). The one migration
+   written for the shared/`ed_`-prefixed schema is
+   `006_rtc_drift_log.sql` (hourly DS1307 drift log + latest-drift columns) —
+   run it on an existing shared DB, or just re-run `schema.sql` (idempotent).
+   aromen.biz/meter posts readings and renders its graphs from these tables as
+   before; the WorkPulse app reads the same rows filtered by `location`.
 
 2. **Secrets** — copy `public_html/_config/secrets.php.example` to
    `public_html/_config/secrets.php` and fill in DB creds + token. Point the

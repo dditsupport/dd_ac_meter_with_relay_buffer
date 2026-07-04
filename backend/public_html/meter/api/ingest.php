@@ -48,6 +48,11 @@ $relay_on    = array_key_exists('relay_on', $body) ? (int)(bool)$body['relay_on'
 $relay_mode  = (string)($body['relay_mode'] ?? '');
 $relay_mode  = in_array($relay_mode, ['auto', 'on', 'off'], true) ? $relay_mode : null;
 
+// Device-reported hourly DS1307 drift (optional): signed seconds measured at
+// the last NTP sync, plus the NTP epoch of that measurement (dedup key).
+$rtc_drift_sec   = array_key_exists('rtc_drift_sec', $body) ? (int)$body['rtc_drift_sec'] : null;
+$rtc_drift_epoch = (int)($body['rtc_drift_epoch'] ?? 0);
+
 if ($device_id === '' || $current_bid <= 0) {
     log_ingest($device_id, 0, 0, 'missing_fields', null);
     json_response(400, ['ok' => false, 'error' => 'missing_fields']);
@@ -101,6 +106,24 @@ if ($relay_on !== null || $relay_mode !== null) {
         )->execute([$relay_on, $relay_mode, $device_id]);
     } catch (Throwable $e) {
         // relay_* columns not present yet — ignore.
+    }
+}
+
+// Log the hourly RTC drift. INSERT IGNORE dedups the same measurement resent on
+// every 2-minute POST; the latest is cached on device_meta for the admin list.
+// Guarded so a DB without migration 006 still ingests readings normally.
+if ($rtc_drift_sec !== null && $rtc_drift_epoch > 0) {
+    $measured_at = date('Y-m-d H:i:s', $rtc_drift_epoch);
+    try {
+        $pdo->prepare(
+            'INSERT IGNORE INTO ed_rtc_drift_log (device_id, measured_at, drift_sec)
+             VALUES (?, ?, ?)'
+        )->execute([$device_id, $measured_at, $rtc_drift_sec]);
+        $pdo->prepare(
+            'UPDATE ed_device_meta SET rtc_drift_sec = ?, rtc_drift_at = ? WHERE device_id = ?'
+        )->execute([$rtc_drift_sec, $measured_at, $device_id]);
+    } catch (Throwable $e) {
+        // ed_rtc_drift_log / rtc_drift_* columns not present yet — ignore.
     }
 }
 
