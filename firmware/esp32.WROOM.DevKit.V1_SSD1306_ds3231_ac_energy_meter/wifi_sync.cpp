@@ -93,6 +93,13 @@ static bool try_connect_known() {
 static uint64_t s_last_ntp_us = 0;
 static bool     s_ntp_ever_ok = false;
 
+// Last measured DS3231 drift for the hourly drift log: signed seconds where
+// + = RTC ahead of true time (running fast), and the NTP epoch at which it was
+// measured (0 = none yet). Sent in the POST; the server logs each distinct
+// measurement so drift can be tracked over time.
+static long   s_rtc_drift_sec   = 0;
+static time_t s_rtc_drift_epoch = 0;
+
 // Last successful ingest POST timestamp (monotonic-us) for the stuck-Wi-Fi
 // watchdog. Sentinel 0 means "never since boot".
 static uint64_t s_last_post_us = 0;
@@ -124,6 +131,12 @@ static bool ntp_sync_if_due() {
       // across power loss. Skip the write if the RTC is already within
       // the small drift threshold to limit flash/I2C traffic.
       time_t rtc_now = rtc::read_epoch();
+      if (rtc_now > 0) {
+        // Capture the signed drift BEFORE any writeback so the hourly log
+        // records how far the RTC had wandered. + = RTC ahead (fast).
+        s_rtc_drift_sec   = (long)rtc_now - (long)now;
+        s_rtc_drift_epoch = now;
+      }
       long drift = (long)now - (long)rtc_now;
       if (drift < 0) drift = -drift;
       if (rtc_now == 0 || drift > RTC_WRITEBACK_DRIFT_SEC) {
@@ -155,6 +168,15 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   doc["relay_on"]      = relay::is_on();
   doc["relay_mode"]    = relay::mode_str();   // "auto" | "on" | "off"
   doc["relay_version"] = relay::version();
+
+  // Hourly DS3231 drift (signed seconds, + = RTC ahead of true time), measured
+  // at the last NTP sync. rtc_drift_epoch is the NTP epoch of that measurement;
+  // the server dedups on (device_id, epoch) so each hourly sample is logged
+  // once even though it rides every 2-minute POST until the next sync.
+  if (s_rtc_drift_epoch > 0) {
+    doc["rtc_drift_sec"]   = s_rtc_drift_sec;
+    doc["rtc_drift_epoch"] = (uint32_t)s_rtc_drift_epoch;
+  }
 
   JsonArray hist = doc.createNestedArray("boot_history");
   storage::BootRecord recs[MAX_BOOT_HISTORY];
@@ -268,9 +290,10 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     }
   }
 
-  // Optional: server-pushed relay schedule. The server attaches relay_version
-  // (uint) and relay_schedule (array) to every ingest response. relay::apply()
-  // is a no-op when nothing changed.
+  // Optional: server-pushed relay config. The server attaches relay_version
+  // (uint), relay_schedule (AC-allowed open hours array), and the two cutoff
+  // knobs relay_compressor_watts / relay_grace_min to every ingest response.
+  // relay::apply() is a no-op when nothing changed; 0 leaves a knob unchanged.
   if (rdoc.containsKey("relay_version")) {
     uint32_t rv = rdoc["relay_version"] | 0;
     String sched_json;
@@ -279,7 +302,9 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     } else {
       sched_json = "[]";
     }
-    relay::apply(rv, sched_json);
+    uint32_t cw = rdoc["relay_compressor_watts"] | 0;   // 0 = leave unchanged
+    uint32_t gm = rdoc["relay_grace_min"]        | 0;   // 0 = leave unchanged
+    relay::apply(rv, sched_json, cw, gm);
   }
 
   // Server-time fallback: if neither the DS3231 nor NTP gave us a wall

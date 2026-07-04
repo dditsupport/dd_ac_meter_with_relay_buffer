@@ -1,7 +1,12 @@
 #pragma once
 
 // ---------- Identity / build ----------
-#define FW_VERSION              "1.0.0"
+// 2.0.0 is a breaking release: the relay schedule now means AC-ALLOWED open
+// hours (energize = cut OUTSIDE the window) — the inverse of 1.x, which
+// energized INSIDE the window. It also adds compressor-aware, fail-safe NC
+// cutoff (see the Relay output section). The backend uses this version to
+// warn about 1.x devices still running the old, inverted convention.
+#define FW_VERSION              "2.0.0"
 
 // ---------- Backend ----------
 // The ingest endpoint URL is split into two parts:
@@ -44,7 +49,7 @@
 #define DISPLAY_REFRESH_MS       1000     // 1 Hz OLED refresh & PZEM sample
 #define WIFI_SCAN_INTERVAL_SEC  120       // 2 minutes between Wi-Fi cycles
 #define NTP_SYNC_TIMEOUT_MS     5000
-#define NTP_RESYNC_INTERVAL_SEC 300       // re-hit the NTP server at most every 5 min
+#define NTP_RESYNC_INTERVAL_SEC 3600      // re-hit the NTP server at most every 1 h
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define HTTP_TIMEOUT_MS         10000
 
@@ -116,19 +121,37 @@
 #define LED_BLINK_TX_MS         60        // toggle period during a data POST
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
 
-// ---------- Relay output ----------
-// Server-scheduled output (e.g. mains contactor for an inverter / pump).
-// Schedule is fetched in each ingest response and cached in NVS so the
-// relay keeps switching during a Wi-Fi outage. Active-high suits most
-// opto-isolated relay boards; set RELAY_ACTIVE_HIGH 0 for inverted-input
-// modules.
+// ---------- Relay output (off-hours AC cutoff) ----------
+// Fail-safe NC wiring: the relay sits DE-ENERGIZED during open hours so the
+// AC has power; to CUT the AC we ENERGIZE it (opening the NC contact). So
+// "energize" == "cut AC", and a dead controller leaves the AC powered.
+// Drive a contactor rated for the compressor's inrush (1.5-2 ton LRA), not a
+// bare PCB relay. Active-high drives the coil on; set RELAY_ACTIVE_HIGH 0 for
+// inverted-input modules.
+//
+// The AC-allowed "open hours" schedule + the two knobs below are pushed by the
+// server per device (relay_schedule / relay_compressor_watts / relay_grace_min)
+// and cached in NVS so cutoff keeps working through a Wi-Fi outage. The values
+// here are only defaults until the server pushes real ones.
 #define PIN_RELAY               26
 #define RELAY_ACTIVE_HIGH       1
 
+// Compressor "is-running" watt threshold: below it the compressor is off, so
+// cutting is safe (and if it stays below all through the grace window at
+// closing, the AC is deemed already-off and we don't cut at all).
+#define RELAY_COMPRESSOR_WATTS_DEFAULT  800     // ~1.5-2 ton compressor floor
+#define RELAY_COMPRESSOR_WATTS_MIN      100
+#define RELAY_COMPRESSOR_WATTS_MAX      10000
+// Grace window after off-hours begin: wait up to this long for the compressor
+// to cycle off before cutting; if it never idles, cut anyway at the deadline.
+#define RELAY_GRACE_MIN_DEFAULT         60      // minutes
+#define RELAY_GRACE_MIN_MIN             1
+#define RELAY_GRACE_MIN_MAX             240
+
 // ---------- Time ----------
 #define TZ_INFO                 "IST-5:30"   // POSIX TZ, used by setenv()
-#define NTP_SERVER_1            "pool.ntp.org"
-#define NTP_SERVER_2            "time.nist.gov"
+#define NTP_SERVER_1            "time.google.com"
+#define NTP_SERVER_2            "time.cloudflare.com"
 
 // ---------- BLE UUIDs (generated once, do not change) ----------
 #define BLE_SERVICE_UUID        "5f12b3bc-8ef3-4b48-a971-f70a38f519ec"
