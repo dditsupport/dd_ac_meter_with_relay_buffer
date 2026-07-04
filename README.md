@@ -55,12 +55,19 @@ lives in RAM, so a power-cycle returns the meter to its server config.
 ## Repository layout
 
 ```
-esp32.supermini_ds1307_ac_energy_meter/   ESP32 firmware (Arduino IDE sketch folder)
-backend/                                  MilesWeb PHP + MySQL (planned, not yet built)
-android/                                  Companion app (planned, not yet built)
-docs/                                     Wiring, provisioning, future hardware notes
-tools/                                    Bench-test helpers (fake_ingest.py)
+esp32.supermini_ds1307_ac_energy_meter/        ESP32-C3 Super Mini firmware (DS1307, no OLED)
+esp32.WROOM.DevKit.V1_SSD1306_ds3231_ac_energy_meter/  ESP32 WROOM DevKit V1 firmware (DS3231 + SSD1306 OLED)
+backend/                                       MilesWeb PHP + MySQL (planned, not yet built)
+android/                                       Companion app (planned, not yet built)
+docs/                                          Wiring, provisioning, future hardware notes
+tools/                                          Bench-test helpers (fake_ingest.py)
 ```
+
+Both firmware folders are self-contained Arduino sketches for the same
+meter; pick the one that matches your hardware. The `.supermini` build
+targets the ESP32-C3 Super Mini with a DS1307 RTC and no display; the
+`.WROOM.DevKit.V1` build targets the ESP32 WROOM DevKit V1 with a DS3231
+RTC and an SSD1306 OLED. They are kept separate, not merged.
 
 ## How fast does data reach the cloud?
 
