@@ -157,16 +157,21 @@ const DEVICE_ID = <?= json_encode($selected) ?>;
 // so "X ago" is correct regardless of the viewer's browser time zone.
 const APP_TZ_OFFSET = <?= json_encode(app_tz_offset()) ?>;
 
+// aggregate    -> bucket size for the energy bars (kept coarse so max-min of
+//                 the cumulative Wh counter spans several samples per bucket).
+// powerAggregate-> bucket size for the Watt line. When set finer than
+//                 `aggregate` the power chart is fetched separately, so short
+//                 ranges show every ~5-minute posting instead of an hourly mean.
 const RANGES = {
   today: {
-    aggregate: 'hourly', from: () => startOfToday(),
+    aggregate: 'hourly', powerAggregate: '5min', from: () => startOfToday(),
     label: "Today's energy (per hour)", energyLabel: 'kWh / hour',
     // Clamp the X axis to the daylight window so the shape of the day
     // is consistent and "nothing yet" is obvious.
     xMin: () => hourOfToday(7), xMax: () => hourOfToday(19),
     xUnit: 'hour',
   },
-  '24h': { aggregate: 'hourly', from: () => hoursAgo(24), label: 'Last 24 hours',           energyLabel: 'kWh / hour', xUnit: 'hour'  },
+  '24h': { aggregate: 'hourly', powerAggregate: '5min', from: () => hoursAgo(24), label: 'Last 24 hours', energyLabel: 'kWh / hour', xUnit: 'hour'  },
   '7d':  { aggregate: 'daily',  from: () => daysAgo(7),   label: 'Last 7 days',              energyLabel: 'kWh / day',  xUnit: 'day'   },
   '30d': { aggregate: 'daily',  from: () => daysAgo(30),  label: 'Last 30 days',             energyLabel: 'kWh / day',  xUnit: 'day'   },
   '12m': { aggregate: 'monthly',from: () => monthsAgo(12),label: 'Last 12 months',           energyLabel: 'kWh / month',xUnit: 'month' },
@@ -210,14 +215,26 @@ async function loadRange(rangeKey){
   const R = RANGES[rangeKey];
   document.getElementById('chart-title').textContent = R.label;
   const from = isoLocal(R.from());
-  const url = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
-              `&aggregate=${R.aggregate}&from=${encodeURIComponent(from)}`;
-  const res = await fetch(url, { credentials: 'same-origin' });
+  const readingsUrl = agg =>
+    `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+    `&aggregate=${agg}&from=${encodeURIComponent(from)}`;
+
+  const res = await fetch(readingsUrl(R.aggregate), { credentials: 'same-origin' });
   const j   = await res.json();
   if (!j.ok) { alert('Error: ' + j.error); return; }
 
   const energyPoints = j.points.map(p => ({ t: p.t, y: p.kwh }));
-  const powerPoints  = j.points.map(p => ({ t: p.t, y: p.P_avg }));
+
+  // The Watt line can be finer-grained than the energy bars. When a distinct
+  // powerAggregate is set, pull the power series from its own request so short
+  // ranges plot every posted reading instead of an hourly average.
+  let powerPoints = j.points.map(p => ({ t: p.t, y: p.P_avg }));
+  if (R.powerAggregate && R.powerAggregate !== R.aggregate) {
+    try {
+      const pr = await (await fetch(readingsUrl(R.powerAggregate), { credentials: 'same-origin' })).json();
+      if (pr.ok) powerPoints = pr.points.map(p => ({ t: p.t, y: p.P_avg }));
+    } catch (e) { /* keep the hourly power series on error */ }
+  }
 
   if (energyChart) energyChart.destroy();
   if (powerChart)  powerChart.destroy();

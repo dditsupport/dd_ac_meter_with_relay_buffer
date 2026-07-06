@@ -23,7 +23,7 @@ if ($device_id === '' || !user_can_see_device($user, $device_id)) {
     json_response(403, ['ok' => false, 'error' => 'no_such_device']);
 }
 
-if (!in_array($aggregate, ['raw', 'hourly', 'daily', 'monthly'], true)) {
+if (!in_array($aggregate, ['raw', '5min', 'hourly', 'daily', 'monthly'], true)) {
     json_response(400, ['ok' => false, 'error' => 'bad_aggregate']);
 }
 
@@ -39,11 +39,19 @@ $meta = $pdo->prepare(
 $meta->execute([$device_id]);
 $dev  = $meta->fetch() ?: [];
 
+// Bucket key expressions. All operate on wall_time's calendar components, so
+// they are unaffected by the MySQL session time zone (which _db.php pins to
+// APP_TIMEZONE anyway). The 5-minute bucket floors the minute to the nearest
+// multiple of 5 on top of the hour.
+$FIVE_MIN_BUCKET = "DATE_ADD(DATE_FORMAT(wall_time, '%Y-%m-%d %H:00:00'), "
+                 . "INTERVAL FLOOR(MINUTE(wall_time) / 5) * 5 MINUTE)";
+
 $points = match ($aggregate) {
     'raw'     => fetch_raw($device_id, $from_str, $to_str),
-    'hourly'  => fetch_bucketed($device_id, $from_str, $to_str, '%Y-%m-%d %H:00:00'),
-    'daily'   => fetch_bucketed($device_id, $from_str, $to_str, '%Y-%m-%d 00:00:00'),
-    'monthly' => fetch_bucketed($device_id, $from_str, $to_str, '%Y-%m-01 00:00:00'),
+    '5min'    => fetch_bucketed($device_id, $from_str, $to_str, $FIVE_MIN_BUCKET),
+    'hourly'  => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d %H:00:00')"),
+    'daily'   => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d 00:00:00')"),
+    'monthly' => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')"),
 };
 
 json_response(200, [
@@ -71,6 +79,7 @@ function resolve_range(string $agg, string $from, string $to): array {
     if ($from === '') {
         $from_dt = match ($agg) {
             'raw'     => $to_dt->modify('-1 day'),
+            '5min'    => $to_dt->modify('-1 day'),
             'hourly'  => $to_dt->modify('-7 days'),
             'daily'   => $to_dt->modify('-30 days'),
             'monthly' => $to_dt->modify('-12 months'),
@@ -104,11 +113,12 @@ function fetch_raw(string $device, string $from, string $to): array {
     ], $st->fetchAll());
 }
 
-function fetch_bucketed(string $device, string $from, string $to, string $fmt): array {
+function fetch_bucketed(string $device, string $from, string $to, string $bucketExpr): array {
     // Per-bucket: max-min of PZEM cumulative Wh = energy generated in bucket.
-    // Plus avg/peak power for context.
+    // Plus avg/peak power for context. $bucketExpr is a server-side constant
+    // (never user input), so it is safe to interpolate into the SQL text.
     $st = db()->prepare(
-        "SELECT DATE_FORMAT(wall_time, ?) AS bucket,
+        "SELECT $bucketExpr        AS bucket,
                 MIN(wall_time)      AS bucket_start,
                 MAX(wall_time)      AS bucket_end,
                 MIN(energy_wh)      AS wh_min,
@@ -124,7 +134,7 @@ function fetch_bucketed(string $device, string $from, string $to, string $fmt): 
           ORDER BY bucket ASC
           LIMIT 5000"
     );
-    $st->execute([$fmt, $device, $from, $to]);
+    $st->execute([$device, $from, $to]);
     return array_map(function ($r) {
         $kwh = max(0.0, ((float)$r['wh_max'] - (float)$r['wh_min']) / 1000.0);
         return [
