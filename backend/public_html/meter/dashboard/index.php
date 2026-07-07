@@ -253,7 +253,15 @@ async function loadRange(rangeKey){
   // Stats. capacity_kw is repurposed as the old meter's last reading (kWh) at
   // install; add it so Period total continues from the replaced meter.
   const baseline = Number(j.capacity_kw) || 0;
-  const periodTotal = energyPoints.reduce((a, p) => a + (p.y || 0), 0);
+  // Period total. For multi-day ranges (7d/30d/12m) use the range's single
+  // start->end meter difference (server total_kwh) rather than summing the
+  // bars, which drops the energy accrued between buckets. Short ranges
+  // (today/24h) keep the bar sum so the number tracks the hourly chart.
+  const useRangeDelta = (R.aggregate === 'daily' || R.aggregate === 'monthly')
+                        && typeof j.total_kwh === 'number';
+  const periodTotal = useRangeDelta
+    ? j.total_kwh
+    : energyPoints.reduce((a, p) => a + (p.y || 0), 0);
   const peakP = powerPoints.reduce((m, p) => Math.max(m, p.y || 0), 0);
   document.getElementById('stat-total').textContent = (periodTotal + baseline).toFixed(2);
   document.getElementById('stat-peak').textContent  = peakP.toFixed(0);

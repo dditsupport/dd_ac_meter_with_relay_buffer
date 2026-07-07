@@ -54,6 +54,20 @@ $points = match ($aggregate) {
     'monthly' => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')"),
 };
 
+// Whole-range start->end meter difference (a single MAX-MIN over the window),
+// for callers that want the true period total instead of summing bucket deltas
+// — the bucket sum drops the energy accrued in the gaps between buckets. NULL
+// when the range has no readings.
+$rt = $pdo->prepare(
+    'SELECT MAX(energy_wh) - MIN(energy_wh) AS wh_delta
+       FROM ed_energy_readings
+      WHERE device_id = ? AND wall_time BETWEEN ? AND ?'
+);
+$rt->execute([$device_id, $from_str, $to_str]);
+$wh_delta  = $rt->fetchColumn();
+$total_kwh = ($wh_delta === null || $wh_delta === false)
+                 ? null : round(max(0.0, (float)$wh_delta / 1000.0), 3);
+
 json_response(200, [
     'ok'            => true,
     'device_id'     => $device_id,
@@ -64,6 +78,7 @@ json_response(200, [
     'from'          => $from_str,
     'to'            => $to_str,
     'aggregate'     => $aggregate,
+    'total_kwh'     => $total_kwh,
     'points'        => $points,
 ]);
 
