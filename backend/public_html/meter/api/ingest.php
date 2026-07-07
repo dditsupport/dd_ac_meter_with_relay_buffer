@@ -53,6 +53,9 @@ $relay_mode  = in_array($relay_mode, ['auto', 'on', 'off'], true) ? $relay_mode 
 $rtc_drift_sec   = array_key_exists('rtc_drift_sec', $body) ? (int)$body['rtc_drift_sec'] : null;
 $rtc_drift_epoch = (int)($body['rtc_drift_epoch'] ?? 0);
 
+// Device-reported connected-AP Wi-Fi signal strength (optional), dBm (signed).
+$wifi_rssi = array_key_exists('wifi_rssi', $body) ? (int)$body['wifi_rssi'] : null;
+
 if ($device_id === '' || $current_bid <= 0) {
     log_ingest($device_id, 0, 0, 'missing_fields', null);
     json_response(400, ['ok' => false, 'error' => 'missing_fields']);
@@ -124,6 +127,28 @@ if ($rtc_drift_sec !== null && $rtc_drift_epoch > 0) {
         )->execute([$rtc_drift_sec, $measured_at, $device_id]);
     } catch (Throwable $e) {
         // ed_rtc_drift_log / rtc_drift_* columns not present yet — ignore.
+    }
+}
+
+// Cache the latest Wi-Fi RSSI (dBm) for the admin list, and tag the current
+// hourly drift sample with it. Separate guarded blocks so a DB without
+// migration 008 (wifi_rssi / rssi_dbm columns) still logs drift and ingests.
+if ($wifi_rssi !== null) {
+    try {
+        $pdo->prepare('UPDATE ed_device_meta SET wifi_rssi = ? WHERE device_id = ?')
+            ->execute([$wifi_rssi, $device_id]);
+    } catch (Throwable $e) {
+        // wifi_rssi column not present yet — ignore.
+    }
+    if ($rtc_drift_sec !== null && $rtc_drift_epoch > 0) {
+        try {
+            $pdo->prepare(
+                'UPDATE ed_rtc_drift_log SET rssi_dbm = ?
+                  WHERE device_id = ? AND measured_at = ?'
+            )->execute([$wifi_rssi, $device_id, date('Y-m-d H:i:s', $rtc_drift_epoch)]);
+        } catch (Throwable $e) {
+            // rssi_dbm column not present yet — ignore.
+        }
     }
 }
 

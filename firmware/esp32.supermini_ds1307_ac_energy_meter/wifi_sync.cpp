@@ -178,6 +178,11 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     doc["rtc_drift_epoch"] = (uint32_t)s_rtc_drift_epoch;
   }
 
+  // Connected-AP Wi-Fi signal strength (dBm, negative). This POST always runs
+  // over Wi-Fi, so RSSI is valid; the server logs it alongside the RTC drift
+  // sample and caches the latest for the admin list.
+  doc["wifi_rssi"] = (int)WiFi.RSSI();
+
   JsonArray hist = doc.createNestedArray("boot_history");
   storage::BootRecord recs[MAX_BOOT_HISTORY];
   size_t hn = storage::get_boot_history(recs, MAX_BOOT_HISTORY);
