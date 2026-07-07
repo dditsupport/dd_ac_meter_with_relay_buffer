@@ -129,23 +129,25 @@ function colorFor(i, n) {          // evenly-spaced hues, distinct per day
 // Day-wise totals below the chart: colour dot + day + that day's total kWh,
 // plus a period total. Day order/colours match the chart datasets.
 //
-// Each day's total is the day's start->end meter difference (a single MAX-MIN
-// from the daily bucket in `dayTotals`), NOT the sum of the hourly buckets that
-// draw the chart lines — summing hourly buckets drops the energy that accrues
-// in the gaps between consecutive hours, reading a few % low. The grand total
-// is the sum of those per-day differences, so it matches the dashboard's
-// monthly figure. Falls back to the hourly sum only if a day is missing from
-// the daily fetch.
-function renderSummary(days, byDay, dayTotals) {
+// Each day's total is its start->end meter difference from the daily aggregate
+// (`dayTotals`), NOT the sum of the hourly buckets that draw the chart lines.
+// The daily aggregate spans each day to the NEXT day's first reading, so the
+// overnight gap is charged to the earlier day and the per-day chips sum exactly
+// to the whole-period total. Falls back to the hourly sum only if a day is
+// missing from the daily fetch.
+//
+// The grand total is the whole-period start->end difference (`rangeTotal`, one
+// MAX-MIN over the range), so it matches the dashboard exactly and equals the
+// sum of the per-day chips. Falls back to the per-day sum when unavailable.
+function renderSummary(days, byDay, dayTotals, rangeTotal) {
   const el = document.getElementById('report-summary');
   el.innerHTML = '';
   if (!days.length) return;
-  let grand = 0;
+  const dayTotal = day => dayTotals.has(day)
+    ? dayTotals.get(day)
+    : Object.values(byDay.get(day)).reduce((a, v) => a + (v || 0), 0);
   days.forEach((day, i) => {
-    const total = dayTotals.has(day)
-      ? dayTotals.get(day)
-      : Object.values(byDay.get(day)).reduce((a, v) => a + (v || 0), 0);
-    grand += total;
+    const total = dayTotal(day);
     const chip = document.createElement('span');
     chip.className = 'day-total';
     const dot = document.createElement('span');
@@ -157,6 +159,9 @@ function renderSummary(days, byDay, dayTotals) {
     chip.appendChild(txt);
     el.appendChild(chip);
   });
+  const grand = (typeof rangeTotal === 'number')
+    ? rangeTotal
+    : days.reduce((a, day) => a + dayTotal(day), 0);
   const tot = document.createElement('span');
   tot.className = 'day-total grand';
   tot.innerHTML = `Total: <b>${grand.toFixed(2)}</b> <span class="unit">kWh</span>`;
@@ -230,12 +235,16 @@ async function load() {
   const dailyUrl = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
                    `&aggregate=daily&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   const dayTotals = new Map();                   // "YYYY-MM-DD" -> kWh (start->end)
+  let rangeTotal = null;                          // whole-period start->end kWh
   try {
     const dj = await (await fetch(dailyUrl, { credentials: 'same-origin' })).json();
-    if (dj.ok) for (const p of dj.points) dayTotals.set(p.t.slice(0, 10), p.kwh || 0);
+    if (dj.ok) {
+      for (const p of dj.points) dayTotals.set(p.t.slice(0, 10), p.kwh || 0);
+      if (typeof dj.total_kwh === 'number') rangeTotal = dj.total_kwh;
+    }
   } catch (e) { /* fall back to the hourly sum in renderSummary */ }
 
-  renderSummary(days, byDay, dayTotals);
+  renderSummary(days, byDay, dayTotals, rangeTotal);
 
   if (chart) chart.destroy();
   chart = new Chart(document.getElementById('report-chart').getContext('2d'), {

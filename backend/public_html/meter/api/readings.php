@@ -50,8 +50,8 @@ $points = match ($aggregate) {
     'raw'     => fetch_raw($device_id, $from_str, $to_str),
     '5min'    => fetch_bucketed($device_id, $from_str, $to_str, $FIVE_MIN_BUCKET),
     'hourly'  => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d %H:00:00')"),
-    'daily'   => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d 00:00:00')"),
-    'monthly' => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')"),
+    'daily'   => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d 00:00:00')", true),
+    'monthly' => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')", true),
 };
 
 // Whole-range start->end meter difference (a single MAX-MIN over the window),
@@ -128,7 +128,8 @@ function fetch_raw(string $device, string $from, string $to): array {
     ], $st->fetchAll());
 }
 
-function fetch_bucketed(string $device, string $from, string $to, string $bucketExpr): array {
+function fetch_bucketed(string $device, string $from, string $to, string $bucketExpr,
+                       bool $spanToNext = false): array {
     // Per-bucket: max-min of PZEM cumulative Wh = energy generated in bucket.
     // Plus avg/peak power for context. $bucketExpr is a server-side constant
     // (never user input), so it is safe to interpolate into the SQL text.
@@ -150,9 +151,24 @@ function fetch_bucketed(string $device, string $from, string $to, string $bucket
           LIMIT 5000"
     );
     $st->execute([$device, $from, $to]);
-    return array_map(function ($r) {
-        $kwh = max(0.0, ((float)$r['wh_max'] - (float)$r['wh_min']) / 1000.0);
-        return [
+    $rows = $st->fetchAll();
+    $n    = count($rows);
+
+    $out = [];
+    foreach ($rows as $i => $r) {
+        // Bucket energy. Default: this bucket's own max-min. In span-to-next
+        // mode (daily/monthly) the bucket instead runs from its first reading to
+        // the NEXT present bucket's first reading, so the gap between buckets
+        // (e.g. overnight, day-to-day) is charged to the earlier bucket and the
+        // buckets sum exactly to the range's start->end total. The last bucket
+        // has no "next", so it keeps its own max-min to absorb the tail up to
+        // the latest reading.
+        if ($spanToNext && $i < $n - 1) {
+            $kwh = max(0.0, ((float)$rows[$i + 1]['wh_min'] - (float)$r['wh_min']) / 1000.0);
+        } else {
+            $kwh = max(0.0, ((float)$r['wh_max'] - (float)$r['wh_min']) / 1000.0);
+        }
+        $out[] = [
             't'        => format_iso($r['bucket']),
             't_end'    => format_iso($r['bucket_end']),
             'kwh'      => round($kwh, 3),
@@ -162,7 +178,8 @@ function fetch_bucketed(string $device, string $from, string $to, string $bucket
             'samples'  => (int)$r['samples'],
             'approx'   => (int)$r['approx_count'] > 0,
         ];
-    }, $st->fetchAll());
+    }
+    return $out;
 }
 
 function format_iso(string $datetime): string {
