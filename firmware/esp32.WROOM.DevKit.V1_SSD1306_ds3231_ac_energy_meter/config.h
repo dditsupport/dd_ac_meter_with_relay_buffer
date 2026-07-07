@@ -121,6 +121,14 @@
 #define LED_BLINK_TX_MS         60        // toggle period during a data POST
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
 
+// ---------- Factory reset button ----------
+// Long-press the on-board BOOT button (GPIO 0) to zero the PZEM energy register
+// — intended for a fresh install only. GPIO 0 is a strapping pin, so it must be
+// HIGH at power-on (it is, via the board pull-up); we only read it after boot.
+// Held LOW (pressed) for this long triggers the reset.
+#define PIN_BOOT_BUTTON         0
+#define FACTORY_RESET_HOLD_MS   5000
+
 // ---------- Relay output (off-hours AC cutoff) ----------
 // Fail-safe NC wiring: the relay sits DE-ENERGIZED during open hours so the
 // AC has power; to CUT the AC we ENERGIZE it (opening the NC contact). So
