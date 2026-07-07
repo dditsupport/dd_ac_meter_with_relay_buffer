@@ -129,17 +129,16 @@ function colorFor(i, n) {          // evenly-spaced hues, distinct per day
 // Day-wise totals below the chart: colour dot + day + that day's total kWh,
 // plus a period total. Day order/colours match the chart datasets.
 //
-// Each day's total is the day's start->end meter difference (a single MAX-MIN
-// from the daily bucket in `dayTotals`), NOT the sum of the hourly buckets that
-// draw the chart lines — summing hourly buckets drops the energy that accrues
-// in the gaps between consecutive hours, reading a few % low. Falls back to the
-// hourly sum only if a day is missing from the daily fetch.
+// Each day's total is its start->end meter difference from the daily aggregate
+// (`dayTotals`), NOT the sum of the hourly buckets that draw the chart lines.
+// The daily aggregate spans each day to the NEXT day's first reading, so the
+// overnight gap is charged to the earlier day and the per-day chips sum exactly
+// to the whole-period total. Falls back to the hourly sum only if a day is
+// missing from the daily fetch.
 //
 // The grand total is the whole-period start->end difference (`rangeTotal`, one
-// MAX-MIN over the range), so it matches the dashboard exactly. It can run a
-// hair above the sum of the per-day chips: energy accrued overnight between
-// days belongs to no single day's bucket. Falls back to the per-day sum when
-// the range total is unavailable.
+// MAX-MIN over the range), so it matches the dashboard exactly and equals the
+// sum of the per-day chips. Falls back to the per-day sum when unavailable.
 function renderSummary(days, byDay, dayTotals, rangeTotal) {
   const el = document.getElementById('report-summary');
   el.innerHTML = '';
