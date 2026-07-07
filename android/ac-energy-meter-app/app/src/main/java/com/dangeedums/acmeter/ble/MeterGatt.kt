@@ -8,9 +8,13 @@ import com.juul.kable.characteristicOf
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 private val SERVICE = BleUuids.SERVICE.toString()
 
+private val AUTH_CHALLENGE_CHAR = characteristicOf(SERVICE, BleUuids.AUTH_CHALLENGE.toString())
+private val AUTH_RESPONSE_CHAR  = characteristicOf(SERVICE, BleUuids.AUTH_RESPONSE.toString())
 private val DEVICE_INFO_CHAR    = characteristicOf(SERVICE, BleUuids.DEVICE_INFO.toString())
 private val SET_WALL_TIME_CHAR  = characteristicOf(SERVICE, BleUuids.SET_WALL_TIME.toString())
 private val BOOT_HISTORY_CHAR   = characteristicOf(SERVICE, BleUuids.BOOT_HISTORY.toString())
@@ -42,6 +46,32 @@ class MeterGatt(
     }
 
     suspend fun disconnect() = peripheral.disconnect()
+
+    /**
+     * BLE access handshake. The device exposes a fresh random nonce on the
+     * Auth-Challenge characteristic; we prove we hold the shared [psk] by
+     * writing HMAC_SHA256(psk, nonce) to the Auth-Response characteristic. The
+     * key never leaves the phone. Returns true if the device then honours a
+     * gated read (Device Info comes back non-empty), false if it stays locked.
+     * Must be called immediately after [connect] and before any other op.
+     */
+    suspend fun authenticate(psk: String): Boolean {
+        val nonce = runCatching { peripheral.read(AUTH_CHALLENGE_CHAR).decodeToString() }
+            .getOrNull()
+        if (nonce.isNullOrBlank() || nonce.length < 16) return false
+        val mac = hmacSha256Hex(psk, nonce)
+        peripheral.write(AUTH_RESPONSE_CHAR, mac.toByteArray(), WriteType.WithResponse)
+        // Verify: a gated characteristic returns empty bytes while unauthenticated.
+        val probe = runCatching { peripheral.read(DEVICE_INFO_CHAR).decodeToString() }.getOrNull()
+        return !probe.isNullOrBlank()
+    }
+
+    private fun hmacSha256Hex(key: String, msg: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(key.toByteArray(), "HmacSHA256"))
+        return mac.doFinal(msg.toByteArray())
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    }
 
     suspend fun readDeviceInfo(): DeviceInfoBle {
         val bytes = peripheral.read(DEVICE_INFO_CHAR)

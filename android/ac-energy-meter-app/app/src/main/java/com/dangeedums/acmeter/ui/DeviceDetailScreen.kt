@@ -199,6 +199,15 @@ private fun AccessGateCard(
                         Text("Retry")
                     }
                 }
+                AccessState.AuthFailed -> {
+                    Text("Authentication failed", style = MaterialTheme.typography.titleMedium)
+                    Text(ui.accessMessage,
+                         style = MaterialTheme.typography.bodySmall,
+                         color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                        Text("Retry")
+                    }
+                }
                 AccessState.Unlocked -> { /* gate not shown */ }
             }
         }

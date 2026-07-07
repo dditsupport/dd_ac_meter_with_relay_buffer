@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewModelScope
 import com.dangeedums.acmeter.AcMeterApp
+import com.dangeedums.acmeter.BuildConfig
 import com.dangeedums.acmeter.ble.DeviceInfoBle
 import com.dangeedums.acmeter.ble.MeterGatt
 import com.dangeedums.acmeter.ble.peripheralForAddress
@@ -41,10 +42,11 @@ enum class ClaimStage { Idle, Submitting, Done, Conflict, Failed }
  *   Checking  - deciding whether a PIN is needed
  *   NeedPin   - registered + we hold the PIN: prompt for it
  *   NeedLogin - registered but not signed in: ask the user to log in
- *   Denied    - registered to someone else / can't verify
- *   Unlocked  - open (unregistered) or PIN accepted -> connect proceeds
+ *   Denied     - registered to someone else / can't verify
+ *   AuthFailed - the BLE HMAC handshake (preshared key) was rejected
+ *   Unlocked   - open (unregistered) or PIN accepted -> connect proceeds
  */
-enum class AccessState { Checking, NeedPin, NeedLogin, Denied, Unlocked }
+enum class AccessState { Checking, NeedPin, NeedLogin, Denied, AuthFailed, Unlocked }
 
 data class DeviceDetailUi(
     val connState: ConnState = ConnState.Idle,
@@ -105,6 +107,19 @@ class DeviceDetailViewModel(
         viewModelScope.launch {
             val info = try {
                 withTimeout(20_000) { gatt.connect() }
+                // Prove we hold the shared BLE key before anything else is
+                // usable. The key never crosses BLE (HMAC challenge/response);
+                // generic tools like nRF Connect can't get past this.
+                if (!gatt.authenticate(BuildConfig.BLE_PSK)) {
+                    runCatching { gatt.disconnect() }
+                    _ui.value = _ui.value.copy(
+                        connState = ConnState.Failed,
+                        access = AccessState.AuthFailed,
+                        accessMessage = "This app couldn't authenticate to the meter. " +
+                            "Make sure the app and firmware are both up to date.",
+                    )
+                    return@launch
+                }
                 gatt.readDeviceInfo()
             } catch (t: Throwable) {
                 _ui.value = _ui.value.copy(
