@@ -250,10 +250,12 @@ async function loadRange(rangeKey){
     label: 'Avg power (W)', data: powerPoints, borderColor: '#c97a1a', tension: 0.25,
   }], 'W', xOpts);
 
-  // Stats
+  // Stats. capacity_kw is repurposed as the old meter's last reading (kWh) at
+  // install; add it so Period total continues from the replaced meter.
+  const baseline = Number(j.capacity_kw) || 0;
   const periodTotal = energyPoints.reduce((a, p) => a + (p.y || 0), 0);
   const peakP = powerPoints.reduce((m, p) => Math.max(m, p.y || 0), 0);
-  document.getElementById('stat-total').textContent = periodTotal.toFixed(2);
+  document.getElementById('stat-total').textContent = (periodTotal + baseline).toFixed(2);
   document.getElementById('stat-peak').textContent  = peakP.toFixed(0);
 
   // "Today" + "Current" come from a raw query of the last hour
@@ -275,12 +277,16 @@ async function loadLive(){
   document.getElementById('stat-now').textContent =
     now === null ? '—' : now.toFixed(0);
 
-  // Today kWh via the daily bucket
+  // Today kWh via the daily bucket. Add the old-meter baseline (capacity_kw,
+  // repurposed as the replaced meter's last reading in kWh) so the figure
+  // continues from that meter.
   let today_kwh = null;
+  let baseline = 0;
   try {
     const today = isoLocal(startOfToday());
     const url2 = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=daily&from=${encodeURIComponent(today)}`;
     const r2 = await (await fetch(url2, { credentials: 'same-origin' })).json();
+    baseline = Number(r2.capacity_kw) || 0;
     if (r2.ok && r2.points.length && typeof r2.points[0].kwh === 'number') {
       today_kwh = r2.points[0].kwh;
     } else if (r2.ok) {
@@ -288,7 +294,7 @@ async function loadLive(){
     }
   } catch (e) { /* fall through */ }
   document.getElementById('stat-today').textContent =
-    today_kwh === null ? '—' : today_kwh.toFixed(2);
+    today_kwh === null ? '—' : (today_kwh + baseline).toFixed(2);
 }
 
 document.querySelectorAll('.range-buttons button').forEach(b => {

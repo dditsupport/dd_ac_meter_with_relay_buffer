@@ -122,7 +122,8 @@ $locations = $pdo->query(
                   </option>
                 <?php endforeach; ?>
               </select></label>
-            <label class="field f-cap"><span class="lbl">kW</span>
+            <label class="field f-cap"
+                   title="Old meter's last reading (kWh) at install. Added to the dashboard Today &amp; Period totals so the figures continue from the replaced meter."><span class="lbl">Old kWh</span>
               <input class="capacity" type="number" step="0.01" min="0" placeholder="—"
                      value="<?= h((string)($d['capacity_kw'] ?? '')) ?>"></label>
             <label class="field f-owner"><span class="lbl">Owner</span>
