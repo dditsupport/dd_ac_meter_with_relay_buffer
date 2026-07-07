@@ -100,14 +100,14 @@
 #define PIN_PZEM_TX             17        // ESP32 TX2 -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_OLED_MOSI           21        // moved off GPIO 23 to free it for I2C SCL
-#define PIN_OLED_SCK            18
-#define PIN_OLED_CS             5
-#define PIN_OLED_DC             4
-#define PIN_OLED_RST            19        // moved off GPIO 2 (strapping pin / on-board LED)
+#define PIN_OLED_SCK            23
+#define PIN_OLED_MOSI           22
+#define PIN_OLED_RST            21
+#define PIN_OLED_DC             19
+#define PIN_OLED_CS             18        // moved off GPIO 5 (strapping pin)
 
-#define PIN_I2C_SDA             22        // DS3231 SDA
-#define PIN_I2C_SCL             23        // DS3231 SCL
+#define PIN_I2C_SDA             4         // DS3231 SDA
+#define PIN_I2C_SCL             15        // DS3231 SCL — GPIO 15 is a strapping pin but idles HIGH (I2C pull-ups), so boot is unaffected
 #define I2C_FREQ_HZ             400000    // DS3231 supports up to 400 kHz
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 
