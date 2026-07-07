@@ -128,13 +128,23 @@ function colorFor(i, n) {          // evenly-spaced hues, distinct per day
 
 // Day-wise totals below the chart: colour dot + day + that day's total kWh,
 // plus a period total. Day order/colours match the chart datasets.
-function renderSummary(days, byDay) {
+//
+// Each day's total is the day's start->end meter difference (a single MAX-MIN
+// from the daily bucket in `dayTotals`), NOT the sum of the hourly buckets that
+// draw the chart lines — summing hourly buckets drops the energy that accrues
+// in the gaps between consecutive hours, reading a few % low. The grand total
+// is the sum of those per-day differences, so it matches the dashboard's
+// monthly figure. Falls back to the hourly sum only if a day is missing from
+// the daily fetch.
+function renderSummary(days, byDay, dayTotals) {
   const el = document.getElementById('report-summary');
   el.innerHTML = '';
   if (!days.length) return;
   let grand = 0;
   days.forEach((day, i) => {
-    const total = Object.values(byDay.get(day)).reduce((a, v) => a + (v || 0), 0);
+    const total = dayTotals.has(day)
+      ? dayTotals.get(day)
+      : Object.values(byDay.get(day)).reduce((a, v) => a + (v || 0), 0);
     grand += total;
     const chip = document.createElement('span');
     chip.className = 'day-total';
@@ -213,7 +223,19 @@ async function load() {
              tension: 0.25, borderWidth: 2, pointRadius: 2 };
   });
 
-  renderSummary(days, byDay);
+  // Per-day + grand totals use each day's start->end meter difference (one
+  // MAX-MIN per day) rather than the sum of hourly buckets, so they line up
+  // with the dashboard. Pull the daily aggregate for that; the hourly series
+  // above still drives the chart lines.
+  const dailyUrl = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+                   `&aggregate=daily&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
+  const dayTotals = new Map();                   // "YYYY-MM-DD" -> kWh (start->end)
+  try {
+    const dj = await (await fetch(dailyUrl, { credentials: 'same-origin' })).json();
+    if (dj.ok) for (const p of dj.points) dayTotals.set(p.t.slice(0, 10), p.kwh || 0);
+  } catch (e) { /* fall back to the hourly sum in renderSummary */ }
+
+  renderSummary(days, byDay, dayTotals);
 
   if (chart) chart.destroy();
   chart = new Chart(document.getElementById('report-chart').getContext('2d'), {
