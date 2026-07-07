@@ -253,13 +253,13 @@ async function loadRange(rangeKey){
   // Stats. capacity_kw is repurposed as the old meter's last reading (kWh) at
   // install; add it so Period total continues from the replaced meter.
   const baseline = Number(j.capacity_kw) || 0;
-  // Period total. For multi-day ranges (7d/30d/12m) use the range's single
-  // start->end meter difference (server total_kwh) rather than summing the
-  // bars, which drops the energy accrued between buckets. Short ranges
-  // (today/24h) keep the bar sum so the number tracks the hourly chart.
-  const useRangeDelta = (R.aggregate === 'daily' || R.aggregate === 'monthly')
-                        && typeof j.total_kwh === 'number';
-  const periodTotal = useRangeDelta
+  // Period total is the range's single start->end meter difference (server
+  // total_kwh, one MAX-MIN over the whole window) — for the Today range that's
+  // today's first reading to the current last reading, one big delta capturing
+  // everything. This is used for every range; summing the bars would drop the
+  // energy accrued in the gaps between buckets. Fall back to the bar sum only
+  // if the server didn't return a total.
+  const periodTotal = typeof j.total_kwh === 'number'
     ? j.total_kwh
     : energyPoints.reduce((a, p) => a + (p.y || 0), 0);
   const peakP = powerPoints.reduce((m, p) => Math.max(m, p.y || 0), 0);
@@ -285,20 +285,20 @@ async function loadLive(){
   document.getElementById('stat-now').textContent =
     now === null ? '—' : now.toFixed(0);
 
-  // Today kWh via the daily bucket. Add the old-meter baseline (capacity_kw,
-  // repurposed as the replaced meter's last reading in kWh) so the figure
-  // continues from that meter.
+  // Today kWh as the sum of today's per-hour deltas (each hourly bucket's own
+  // max-min), so it matches the hourly bars on the chart. The Period total card
+  // carries the whole-day start->end figure instead. Add the old-meter baseline
+  // (capacity_kw, repurposed as the replaced meter's last reading in kWh) so the
+  // figure continues from that meter.
   let today_kwh = null;
   let baseline = 0;
   try {
     const today = isoLocal(startOfToday());
-    const url2 = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=daily&from=${encodeURIComponent(today)}`;
+    const url2 = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=hourly&from=${encodeURIComponent(today)}`;
     const r2 = await (await fetch(url2, { credentials: 'same-origin' })).json();
     baseline = Number(r2.capacity_kw) || 0;
-    if (r2.ok && r2.points.length && typeof r2.points[0].kwh === 'number') {
-      today_kwh = r2.points[0].kwh;
-    } else if (r2.ok) {
-      today_kwh = 0;
+    if (r2.ok) {
+      today_kwh = r2.points.reduce((a, p) => a + (p.kwh || 0), 0);
     }
   } catch (e) { /* fall through */ }
   document.getElementById('stat-today').textContent =
