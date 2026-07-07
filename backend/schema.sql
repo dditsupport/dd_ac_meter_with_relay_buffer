@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS ed_energy_devices (
   friendly_name   VARCHAR(64)  NOT NULL,
   location        INT          NULL,          -- FK -> locations.location_id
   installed_at    DATE         NULL,
-  capacity_kw     DECIMAL(5,2) NULL,
+  -- Old meter's last reading (kWh) at install. Added to the dashboard Today &
+  -- Period totals so the figures continue from the meter this device replaced.
+  -- (Legacy column name; it no longer represents a kW capacity.)
+  capacity_kw     DECIMAL(12,2) NULL,
   notes           TEXT         NULL,
   owner_user_id   INT UNSIGNED NULL,
   -- App-side BLE access PIN. Auto-generated at registration; the firmware
