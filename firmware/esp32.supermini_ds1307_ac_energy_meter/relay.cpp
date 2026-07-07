@@ -25,16 +25,14 @@ static float s_latest_power_w = 0.0f;
 static bool  s_power_valid    = false;
 
 // Cutoff state machine (per off-hours period).
-//   ALLOWED       - inside open hours: de-energized (AC on).
-//   MONITORING    - off hours, waiting out the grace window. If the compressor
-//                   is running the cut is deferred (WAIT_FOR_IDLE) to avoid
-//                   opening under load; if it is idle we cut at the grace
-//                   deadline.
-//   WAIT_FOR_IDLE - AC running; de-energized, waiting for the compressor to
-//                   cycle off (or the grace deadline) before cutting.
-//   CUT_LATCHED   - relay energized (AC cut) and latched for the rest of the
-//                   off-hours period (PZEM now reads ~0, must not re-open).
-enum class SmState : uint8_t { ALLOWED, MONITORING, WAIT_FOR_IDLE, CUT_LATCHED };
+//   ALLOWED     - inside open hours: de-energized (AC on).
+//   MONITORING  - off hours: de-energized while the compressor is still running
+//                 (wattage >= threshold) so we never open under load. Cuts the
+//                 moment wattage drops below the threshold, or at the grace
+//                 deadline at the latest (hard-cut a still-running AC).
+//   CUT_LATCHED - relay energized (AC cut) and latched for the rest of the
+//                 off-hours period (PZEM now reads ~0, must not re-open).
+enum class SmState : uint8_t { ALLOWED, MONITORING, CUT_LATCHED };
 static SmState  s_sm            = SmState::ALLOWED;
 static uint64_t s_offhours_us   = 0;   // monotonic-us when off hours began
 
@@ -53,10 +51,9 @@ static inline uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi) {
 
 static const char *sm_str(SmState s) {
   switch (s) {
-    case SmState::MONITORING:    return "monitoring";
-    case SmState::WAIT_FOR_IDLE: return "wait_idle";
-    case SmState::CUT_LATCHED:   return "cut";
-    default:                     return "allowed";
+    case SmState::MONITORING:  return "monitoring";
+    case SmState::CUT_LATCHED: return "cut";
+    default:                   return "allowed";
   }
 }
 
@@ -274,25 +271,19 @@ void tick() {
                   (unsigned)s_grace_min);
   }
 
-  bool     grace_elapsed = (now_us - s_offhours_us) >=
-                           (uint64_t)s_grace_min * 60ULL * 1000000ULL;
-  bool     running       = s_power_valid && s_latest_power_w >= (float)s_compressor_watts;
+  bool grace_elapsed = (now_us - s_offhours_us) >=
+                       (uint64_t)s_grace_min * 60ULL * 1000000ULL;
+  // Compressor is idle only when a FRESH reading is below the threshold. An
+  // invalid/stale reading counts as "still running" so we never hard-cut a
+  // possibly-loaded compressor before the grace deadline.
+  bool idle = s_power_valid && s_latest_power_w < (float)s_compressor_watts;
 
   switch (s_sm) {
     case SmState::MONITORING:
-      if (running) {
-        s_sm = SmState::WAIT_FOR_IDLE;
-        LOG_PRINTLN("[relay] AC running — waiting for compressor to cycle off before cutting");
+      if (idle) {
+        cut_and_latch("power below threshold");  // compressor off — safe to cut now
       } else if (grace_elapsed) {
-        cut_and_latch("idle through grace");   // cut and hold until open hours
-      }
-      break;
-
-    case SmState::WAIT_FOR_IDLE:
-      if (!running) {
-        cut_and_latch("compressor idle");
-      } else if (grace_elapsed) {
-        cut_and_latch("grace deadline");
+        cut_and_latch("grace deadline");         // still drawing — hard-cut at deadline
       }
       break;
 

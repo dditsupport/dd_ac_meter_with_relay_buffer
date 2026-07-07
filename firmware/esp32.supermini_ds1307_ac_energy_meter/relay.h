@@ -16,11 +16,11 @@
 // an unconfigured device.
 //
 // tick() runs every loop tick (~50 ms) and drives the GPIO from a small state
-// machine: outside the open-hours window it waits for the compressor to cycle
-// off (wattage < threshold) before energizing to cut, and cuts by the grace
-// deadline at the latest — even if the AC was already idle at closing. Once
-// cut it stays latched until the next open-hours start. update_power() feeds it
-// the latest PZEM wattage at 1 Hz.
+// machine: outside the open-hours window it energizes to cut as soon as the
+// wattage is below the compressor threshold (idle = safe to open under no load),
+// or by the grace deadline at the latest if it never idles. An AC already idle
+// at closing is cut right away. Once cut it stays latched until the next
+// open-hours start. update_power() feeds it the latest PZEM wattage at 1 Hz.
 //
 // The Android app can also take manual control over BLE (see Mode below):
 // FORCE_ON (energize = cut) / FORCE_OFF (de-energize = AC on) override the
