@@ -9,6 +9,11 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_db.php';
 
+// The PZEM-004T energy register counts in Wh and wraps back to 0 when it passes
+// 9999.99 kWh (= 9,999,990 Wh). Differencing across that wrap must add the span
+// past the ceiling instead of reading a huge negative delta.
+const PZEM_WH_ROLLOVER = 9999990.0;
+
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(405, ['ok' => false, 'error' => 'method_not_allowed']);
 }
@@ -54,19 +59,41 @@ $points = match ($aggregate) {
     'monthly' => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')", true),
 };
 
-// Whole-range start->end meter difference (a single MAX-MIN over the window),
-// for callers that want the true period total instead of summing bucket deltas
-// — the bucket sum drops the energy accrued in the gaps between buckets. NULL
-// when the range has no readings.
+// Whole-range energy total, in kWh. Normally the PZEM Wh register climbs
+// monotonically, so this is just last-first (== MAX-MIN). If it went backwards
+// over the window the register either WRAPPED past its 9999.99 kWh ceiling
+// (peak MAX near the ceiling) or was RESET to 0 (the fresh-install BOOT
+// long-press). Handle each so a wrap/reset doesn't explode the total to
+// ~10,000 kWh or show a bogus negative. NULL when the range has no readings.
 $rt = $pdo->prepare(
-    'SELECT MAX(energy_wh) - MIN(energy_wh) AS wh_delta
+    'SELECT MIN(energy_wh) AS mn, MAX(energy_wh) AS mx,
+            (SELECT energy_wh FROM ed_energy_readings
+               WHERE device_id = ? AND wall_time BETWEEN ? AND ?
+               ORDER BY wall_time ASC, id ASC LIMIT 1) AS fst,
+            (SELECT energy_wh FROM ed_energy_readings
+               WHERE device_id = ? AND wall_time BETWEEN ? AND ?
+               ORDER BY wall_time DESC, id DESC LIMIT 1) AS lst
        FROM ed_energy_readings
       WHERE device_id = ? AND wall_time BETWEEN ? AND ?'
 );
-$rt->execute([$device_id, $from_str, $to_str]);
-$wh_delta  = $rt->fetchColumn();
-$total_kwh = ($wh_delta === null || $wh_delta === false)
-                 ? null : round(max(0.0, (float)$wh_delta / 1000.0), 3);
+$rt->execute([$device_id, $from_str, $to_str,
+              $device_id, $from_str, $to_str,
+              $device_id, $from_str, $to_str]);
+$row = $rt->fetch();
+if ($row === false || $row['fst'] === null || $row['lst'] === null) {
+    $total_kwh = null;
+} else {
+    $fst = (float)$row['fst']; $lst = (float)$row['lst'];
+    $mn  = (float)$row['mn'];  $mx  = (float)$row['mx'];
+    if ($lst >= $fst) {
+        $total_wh = $mx - $mn;                         // monotonic over the window
+    } elseif ($mx >= PZEM_WH_ROLLOVER * 0.99) {
+        $total_wh = ($mx - $fst) + $lst;               // wrapped past the ceiling
+    } else {
+        $total_wh = $lst;                              // reset to 0 -> post-reset only
+    }
+    $total_kwh = round(max(0.0, $total_wh) / 1000.0, 3);
+}
 
 json_response(200, [
     'ok'            => true,
@@ -164,7 +191,7 @@ function fetch_bucketed(string $device, string $from, string $to, string $bucket
         // has no "next", so it keeps its own max-min to absorb the tail up to
         // the latest reading.
         if ($spanToNext && $i < $n - 1) {
-            $kwh = max(0.0, ((float)$rows[$i + 1]['wh_min'] - (float)$r['wh_min']) / 1000.0);
+            $kwh = wh_span_kwh((float)$r['wh_min'], (float)$rows[$i + 1]['wh_min']);
         } else {
             $kwh = max(0.0, ((float)$r['wh_max'] - (float)$r['wh_min']) / 1000.0);
         }
@@ -185,4 +212,20 @@ function fetch_bucketed(string $device, string $from, string $to, string $bucket
 function format_iso(string $datetime): string {
     return (new DateTimeImmutable($datetime, new DateTimeZone(APP_TIMEZONE)))
         ->format('c');
+}
+
+// Energy consumed between two cumulative Wh register readings, in kWh. A drop
+// (curr < prev) means the register either wrapped past its 9999.99 kWh ceiling
+// or was reset to 0. When prev is near the ceiling treat it as a wrap and add
+// the span past it; a drop from a value not near the ceiling is a meter reset
+// (fresh-install BOOT long-press), counted as no consumption so it never
+// inflates a bucket's total.
+function wh_span_kwh(float $prev, float $curr): float {
+    $d = $curr - $prev;
+    if ($d < 0) {
+        $d = $prev >= PZEM_WH_ROLLOVER * 0.99
+             ? (PZEM_WH_ROLLOVER - $prev) + $curr   // wrapped past the ceiling
+             : 0.0;                                 // reset / anomaly
+    }
+    return max(0.0, $d) / 1000.0;
 }

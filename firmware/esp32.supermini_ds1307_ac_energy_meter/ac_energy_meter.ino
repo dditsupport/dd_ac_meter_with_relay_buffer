@@ -30,6 +30,10 @@
 SharedState g_state;
 SemaphoreHandle_t g_state_mutex;
 
+// Set by loop() on a BOOT-button long-press; consumed by sampling_task, which
+// owns all PZEM/Modbus access, so the reset never races a concurrent read.
+static volatile bool g_energy_reset_req = false;
+
 // ---- Forward declarations ---------------------------------------------------
 static void sampling_task(void *);
 static void connectivity_task(void *);
@@ -61,6 +65,9 @@ void setup() {
     while (true) delay(1000);
   }
   pzem::begin();
+
+  // BOOT button for the fresh-install energy reset (long-press in loop()).
+  pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
   // Seed wall clock from the DS1307 if it's healthy. This lets "Today:" energy
   // totals track from boot instead of only counting the current session until
@@ -153,6 +160,24 @@ void loop() {
       line += c;
     }
   }
+
+  // BOOT button (GPIO 9) long-press = zero the PZEM energy register (fresh
+  // install). We only raise a request here; sampling_task performs the reset so
+  // all PZEM access stays on one task. Fires once per hold.
+  static uint32_t boot_press_start_ms = 0;
+  static bool     boot_reset_fired    = false;
+  if (digitalRead(PIN_BOOT_BUTTON) == LOW) {
+    if (boot_press_start_ms == 0) boot_press_start_ms = millis();
+    if (!boot_reset_fired && (millis() - boot_press_start_ms) >= FACTORY_RESET_HOLD_MS) {
+      boot_reset_fired   = true;
+      g_energy_reset_req = true;
+      LOG_PRINTLN("[reset] BOOT held — energy reset requested");
+    }
+  } else {
+    boot_press_start_ms = 0;
+    boot_reset_fired    = false;
+  }
+
   led::tick();
   relay::tick();
   delay(50);
@@ -234,6 +259,18 @@ static void sampling_task(void *) {
 
   for (;;) {
     esp_task_wdt_reset();
+
+    // Fresh-install energy reset requested via the BOOT long-press (loop()).
+    // Done here so the resetEnergy() Modbus write never races pzem::read().
+    if (g_energy_reset_req) {
+      g_energy_reset_req = false;
+      if (pzem::reset_energy()) {
+        session_anchor_wh = -1.0f;   // re-anchor session; today re-anchors on the drop
+        LOG_PRINTLN("[reset] PZEM energy register zeroed (fresh install)");
+      } else {
+        LOG_PRINTLN("[reset] pzem::reset_energy() failed");
+      }
+    }
 
     PzemSample sample{};
     bool ok = pzem::read(sample);
