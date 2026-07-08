@@ -7,12 +7,12 @@
 #include "rtc.h"
 #include "led.h"
 #include "relay.h"
+#include "ble_service.h"   // pause/resume advertising during the Wi-Fi connect
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include "esp_coexist.h"   // esp_coex_preference_set() — Wi-Fi/BLE radio sharing
 #include "log_serial.h"
 
 // TODO: HMAC payload signing as a future hardening step. For v1, the only auth
@@ -91,24 +91,45 @@ static bool try_connect_known() {
   WiFi.disconnect(false, false);
   delay(200);
 
-  // Give Wi-Fi priority on the shared radio for the duration of the connect.
-  // On the single-core ESP32-C3, BLE (NimBLE) advertising otherwise starves the
-  // 802.11 auth exchange and it expires (disconnect reason 2 = AUTH_EXPIRE)
-  // even with a strong signal. We restore the balanced preference before
-  // returning so BLE responsiveness isn't degraded once we're connected/idle.
-  esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+  // Pause BLE advertising for the whole connect window. On the single-core
+  // ESP32-C3 the radio is time-shared with BLE in software, and NimBLE
+  // advertising starves the 802.11 auth exchange so it expires (disconnect
+  // reason 2 = AUTH_EXPIRE) even at a strong signal — which is exactly why the
+  // stand-alone Wi-Fi scanner (no BLE) sees the AP fine but this firmware could
+  // not associate. With advertising stopped, Wi-Fi owns the radio for auth /
+  // assoc / the WPA handshake. Advertising is resumed before we return.
+  ble_service::pause_advertising();
+  delay(100);
 
-  // Connect by calling WiFi.begin() directly for each stored network — do NOT
-  // gate it behind a preceding WiFi.scanNetworks() match. On the single-core
-  // ESP32-C3 the radio is time-shared with BLE (NimBLE advertises/connects
-  // continuously), so a synchronous active scan often completes only partially
-  // — or returns 0 APs — even when the AP is well in range. The old scan-gated
-  // path then hit "found <= 0" (or no SSID match) and skipped WiFi.begin()
-  // entirely, so the device never associated. It also could never join a hidden
-  // SSID. Letting the IDF connection manager locate the AP's channel is both
-  // coexistence-aware and far more reliable, and it's all we need since only one
-  // network is stored (MAX_WIFI_CREDS == 1).
+  // Report the target AP's signal level as this device sees it. Now that BLE is
+  // paused the scan is reliable (unlike a scan run alongside BLE). This is
+  // informational only — we always attempt the connect below, so a hidden SSID
+  // or a scan miss never blocks it.
+  int found = WiFi.scanNetworks(false, true, false, 300);
   for (size_t i = 0; i < n; ++i) {
+    bool seen = false;
+    for (int j = 0; j < found; ++j) {
+      if (WiFi.SSID(j) == creds[i].ssid) {
+        LOG_PRINTF("[wifi] \"%s\" seen at %d dBm (ch %d)\n",
+                      creds[i].ssid.c_str(), (int)WiFi.RSSI(j), WiFi.channel(j));
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) {
+      LOG_PRINTF("[wifi] \"%s\" not seen in scan (hidden or out of range)\n",
+                    creds[i].ssid.c_str());
+    }
+  }
+  if (found > 0) WiFi.scanDelete();
+
+  // Connect by calling WiFi.begin() directly for each stored network, retrying
+  // a few times per cycle since a coexistence-starved auth can expire
+  // transiently. We do NOT gate the connect on the scan above: the IDF
+  // connection manager finds the AP's channel itself, which also covers hidden
+  // SSIDs.
+  bool connected = false;
+  for (size_t i = 0; i < n && !connected; ++i) {
     for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS; ++attempt) {
       set_wifi_status(WIFI_CONNECTING);
       // Print the exact SSID and password being used so the credential in NVS
@@ -129,8 +150,8 @@ static bool try_connect_known() {
         LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
                       creds[i].ssid.c_str(),
                       WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-        esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
-        return true;
+        connected = true;
+        break;
       }
       // Report the terminal status AND the STA disconnect reason so the console
       // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
@@ -144,8 +165,11 @@ static bool try_connect_known() {
       delay(200);
     }
   }
-  esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
-  return false;
+
+  // Restore advertising whether or not we connected, so the app can still reach
+  // the device over BLE between Wi-Fi cycles.
+  ble_service::resume_advertising();
+  return connected;
 }
 
 // Last NTP sync (uint64 monotonic-us) and last good epoch, for rate-limiting.
