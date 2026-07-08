@@ -216,7 +216,6 @@ async function load() {
   const days = [...byDay.keys()].sort();
   const empty = days.length === 0;
   document.getElementById('report-empty').hidden = !empty;
-  document.getElementById('report-chart').style.display = empty ? 'none' : '';
 
   const datasets = days.map((day, i) => {
     const hours = byDay.get(day);
@@ -246,15 +245,24 @@ async function load() {
 
   renderSummary(days, byDay, dayTotals, rangeTotal);
 
-  // Tear down any existing chart on this canvas before making a new one.
-  // Switching devices calls load() again; if the previous chart is left bound
-  // to the canvas, Chart.js throws "Canvas is already in use" and the new chart
-  // never renders (chips still update). getChart() catches a stray instance the
-  // `chart` variable may have lost track of after an earlier error.
+  // Tear down any existing chart on this canvas before (re)drawing. Two things
+  // were breaking the chart when switching device/range:
+  //   1. a leftover chart bound to the canvas -> Chart.js "Canvas is already in
+  //      use" and the new one never renders (chips still update);
+  //   2. toggling the canvas's display none/'' -> Chart.js's resize observer
+  //      re-measured it to zero and the freshly-drawn chart vanished ("appears
+  //      then hides").
+  // So: destroy any instance (getChart catches one the `chart` var lost track
+  // of), never touch the canvas display, and just clear it when there's nothing.
   if (chart) { chart.destroy(); chart = null; }
   const stray = Chart.getChart('report-chart');
   if (stray) stray.destroy();
-  chart = new Chart(document.getElementById('report-chart').getContext('2d'), {
+  const canvas = document.getElementById('report-chart');
+  if (empty) {
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+  chart = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: { datasets },
     options: {
