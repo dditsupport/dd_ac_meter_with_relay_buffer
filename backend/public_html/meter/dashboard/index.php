@@ -171,7 +171,11 @@ const RANGES = {
     xMin: () => hourOfToday(7), xMax: () => hourOfToday(19),
     xUnit: 'hour',
   },
-  '24h': { aggregate: 'hourly', powerAggregate: '5min', from: () => hoursAgo(24), label: 'Last 24 hours', energyLabel: 'kWh / hour', xUnit: 'hour'  },
+  '24h': { aggregate: 'hourly', powerAggregate: '5min', from: () => startOfToday(),
+           label: '24 hours (12 AM – 12 AM)', energyLabel: 'kWh / hour',
+           // Frame the whole calendar day midnight-to-midnight, not a rolling
+           // "last 24 h from now", so the bars line up on hour boundaries.
+           xMin: () => hourOfToday(0), xMax: () => hourOfToday(24), xUnit: 'hour' },
   '7d':  { aggregate: 'daily',  from: () => daysAgo(7),   label: 'Last 7 days',              energyLabel: 'kWh / day',  xUnit: 'day'   },
   '30d': { aggregate: 'daily',  from: () => daysAgo(30),  label: 'Last 30 days',             energyLabel: 'kWh / day',  xUnit: 'day'   },
   '12m': { aggregate: 'monthly',from: () => monthsAgo(12),label: 'Last 12 months',           energyLabel: 'kWh / month',xUnit: 'month' },
