@@ -55,15 +55,28 @@ static bool try_connect_known() {
 
   storage::WifiCred creds[MAX_WIFI_CREDS];
   size_t n = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
-  if (n == 0) return false;
+  if (n == 0) {
+    LOG_PRINTLN("[wifi] no saved network — nothing to connect to");
+    return false;
+  }
+
+  // Log the saved network(s) so the serial console shows exactly which SSID the
+  // device is about to try (and how many are stored).
+  LOG_PRINTF("[wifi] %u saved network(s):\n", (unsigned)n);
+  for (size_t i = 0; i < n; ++i) {
+    LOG_PRINTF("[wifi]   [%u] \"%s\"\n", (unsigned)i, creds[i].ssid.c_str());
+  }
 
   // Not connected: clear any lingering "connecting" state before the
-  // WiFi.begin() below. On the single-core ESP32-C3 (Wi-Fi sharing the core
-  // with BLE), a prior failed attempt or the auto-reconnect can leave the STA
-  // stuck mid-connect; the IDF then rejects the next set_config with "sta is
-  // connecting, cannot set config", so the fresh credentials never apply and it
-  // never associates. A disconnect forces the set_config to be accepted.
+  // WiFi.begin() below, then give the IDF a moment to actually leave the
+  // connecting state. On the single-core ESP32-C3 (Wi-Fi sharing the core with
+  // BLE), a prior failed attempt can leave the STA stuck mid-connect; the IDF
+  // then rejects the next set_config with "sta is connecting, cannot set
+  // config", so the fresh credentials never apply and it never associates.
+  // (Background auto-reconnect — the usual source of that stuck state — is
+  // disabled in begin(), so we drive every connect from a clean, idle STA.)
   WiFi.disconnect(false, false);
+  delay(200);
 
   // Connect by calling WiFi.begin() directly for each stored network — do NOT
   // gate it behind a preceding WiFi.scanNetworks() match. On the single-core
@@ -77,6 +90,7 @@ static bool try_connect_known() {
   // network is stored (MAX_WIFI_CREDS == 1).
   for (size_t i = 0; i < n; ++i) {
     set_wifi_status(WIFI_CONNECTING);
+    LOG_PRINTF("[wifi] connecting to \"%s\" ...\n", creds[i].ssid.c_str());
     WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED &&
@@ -85,10 +99,16 @@ static bool try_connect_known() {
     }
     if (WiFi.status() == WL_CONNECTED) {
       set_wifi_status(WIFI_CONNECTED);
-      LOG_PRINTF("[wifi] connected to %s, ip=%s\n",
-                    creds[i].ssid.c_str(), WiFi.localIP().toString().c_str());
+      LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
+                    creds[i].ssid.c_str(),
+                    WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
       return true;
     }
+    // Report the terminal status so the console distinguishes a wrong password
+    // (WL_CONNECT_FAILED=4) from "AP not found" (WL_NO_SSID_AVAIL=1) from a
+    // plain timeout/disconnect (WL_DISCONNECTED=6).
+    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d)\n",
+                  creds[i].ssid.c_str(), (int)WiFi.status());
     WiFi.disconnect(true, true);
   }
   return false;
@@ -349,10 +369,18 @@ uint32_t seconds_since_last_successful_post() {
 
 void begin() {
   WiFi.mode(WIFI_STA);
-  // Stay associated continuously (the monitor is mains-powered). The STA
-  // auto-rejoins if the AP blips, so the device is reachable between sync
-  // cycles and the app's "Wi-Fi: Connected" status is accurate.
-  WiFi.setAutoReconnect(true);
+  // Drive every (re)connect ourselves from run_cycle()/try_connect_known()
+  // instead of letting the IDF auto-reconnect in the background. On the
+  // single-core C3 the auto-reconnect handler fires a fresh esp_wifi_connect()
+  // the instant an attempt fails and races our own WiFi.disconnect()/
+  // WiFi.begin(), which makes esp_wifi_set_config() reject the new credentials
+  // with "sta is connecting, cannot set config" (seen in the serial log) — so
+  // the SSID/password never apply and the device never associates. With
+  // auto-reconnect off, each connect starts from a clean, idle STA. We already
+  // reconnect on every 2-minute cycle (and immediately on a sync request), and
+  // try_connect_known() early-returns while the link is up, so continuous
+  // reachability is preserved without the racing background reconnector.
+  WiFi.setAutoReconnect(false);
   WiFi.persistent(false);
 }
 
