@@ -246,7 +246,14 @@ async function load() {
 
   renderSummary(days, byDay, dayTotals, rangeTotal);
 
-  if (chart) chart.destroy();
+  // Tear down any existing chart on this canvas before making a new one.
+  // Switching devices calls load() again; if the previous chart is left bound
+  // to the canvas, Chart.js throws "Canvas is already in use" and the new chart
+  // never renders (chips still update). getChart() catches a stray instance the
+  // `chart` variable may have lost track of after an earlier error.
+  if (chart) { chart.destroy(); chart = null; }
+  const stray = Chart.getChart('report-chart');
+  if (stray) stray.destroy();
   chart = new Chart(document.getElementById('report-chart').getContext('2d'), {
     type: 'line',
     data: { datasets },
