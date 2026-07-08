@@ -51,6 +51,11 @@
 #define NTP_SYNC_TIMEOUT_MS     5000
 #define NTP_RESYNC_INTERVAL_SEC 3600      // re-hit the NTP server at most every 1 h
 #define WIFI_CONNECT_TIMEOUT_MS 15000
+// Retry a stalled association a few times per Wi-Fi cycle. On the single-core
+// ESP32-C3 the radio is time-shared with BLE, so the initial 802.11 auth can
+// expire (disconnect reason 2 = AUTH_EXPIRE) even with a strong signal; a
+// retry usually gets through once the coexistence arbiter settles.
+#define WIFI_CONNECT_ATTEMPTS   3
 #define HTTP_TIMEOUT_MS         10000
 
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
