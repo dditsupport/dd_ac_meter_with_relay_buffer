@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS ed_device_meta (
   rtc_drift_at      DATETIME    NULL,
   -- Latest connected-AP Wi-Fi signal strength reported on ingest (dBm, signed).
   wifi_rssi         SMALLINT    NULL,
+  -- Latest CR2032 RTC-backup coin-cell voltage reported on ingest (millivolts).
+  coincell_mv       SMALLINT UNSIGNED NULL,
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -80,6 +82,7 @@ CREATE TABLE IF NOT EXISTS ed_rtc_drift_log (
   measured_at DATETIME    NOT NULL,   -- NTP time at the sync
   drift_sec   INT         NOT NULL,   -- signed; + = RTC ahead of true time
   rssi_dbm    SMALLINT    NULL,       -- connected-AP Wi-Fi RSSI at this sample
+  coincell_mv SMALLINT UNSIGNED NULL, -- CR2032 RTC-backup coin-cell mV at this sample
   received_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_dev_measured (device_id, measured_at),
   KEY idx_dev_time (device_id, measured_at),

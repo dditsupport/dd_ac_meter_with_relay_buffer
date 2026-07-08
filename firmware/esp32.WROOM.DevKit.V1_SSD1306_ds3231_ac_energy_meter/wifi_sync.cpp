@@ -163,6 +163,25 @@ static bool ntp_sync_if_due() {
   return false;
 }
 
+// Averaged CR2032 coin-cell (RTC backup) voltage in millivolts, read from
+// PIN_COINCELL_ADC. analogReadMilliVolts() applies the chip's eFuse ADC
+// calibration, so no manual esp_adc_cal work is needed. COINCELL_DIVIDER_RATIO
+// scales the pin voltage back to the cell node (1.0 on this build — no
+// divider). Reported on each POST.
+static uint32_t read_coincell_mv() {
+  static bool s_adc_ready = false;
+  if (!s_adc_ready) {
+    analogSetPinAttenuation(PIN_COINCELL_ADC, ADC_11db);  // ~0–3.1 V full scale
+    s_adc_ready = true;
+  }
+  uint32_t acc = 0;
+  for (int i = 0; i < COINCELL_ADC_SAMPLES; ++i) {
+    acc += analogReadMilliVolts(PIN_COINCELL_ADC);
+  }
+  float mv = (float)acc / COINCELL_ADC_SAMPLES * COINCELL_DIVIDER_RATIO;
+  return (uint32_t)(mv + 0.5f);
+}
+
 static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // Collect up to SYNC_BATCH_SIZE rows with seq <= snapshot_seq.
   StaticJsonDocument<16384> doc;
@@ -190,6 +209,10 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // over Wi-Fi, so RSSI is valid; the server logs it alongside the RTC drift
   // sample and caches the latest for the admin list.
   doc["wifi_rssi"] = (int)WiFi.RSSI();
+
+  // CR2032 coin-cell (RTC backup) voltage (millivolts). Logged next to the RTC
+  // drift sample and cached as the latest for the admin list.
+  doc["coincell_mv"] = read_coincell_mv();
 
   JsonArray hist = doc.createNestedArray("boot_history");
   storage::BootRecord recs[MAX_BOOT_HISTORY];

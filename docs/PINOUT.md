@@ -57,6 +57,8 @@ after storage init.
 | SQW | — | — | leave disconnected |
 | **Status LED (external)** | | | |
 | Anode (→ resistor) | GPIO7 | **7** | active-high; ~330 Ω to LED, LED to GND |
+| **CR2032 coin-cell sense** | | | ADC1, no divider |
+| Cell + (→ sense) | GPIO4 | **4** | ADC1_CH4; CR2032 stays ≤3.1 V so wire straight, no divider |
 | **AC-cutoff contactor** | | | |
 | IN (control) | GPIO10 | **10** | energize = cut AC (see below) |
 | VCC | 5V rail | **5V** | |
@@ -119,6 +121,7 @@ all of them free of signal wiring:
 
 Unused and available (all non-strapping unless noted):
 
-- **GPIO0, GPIO1, GPIO3, GPIO4** (also usable as ADC A0/A1/A3/A4)
+- **GPIO0, GPIO1, GPIO3** (also usable as ADC A0/A1/A3)
+- **GPIO4** — used for the CR2032 coin-cell voltage sense (ADC1_CH4)
 - **GPIO2, GPIO8** — usable but strapping pins; wire with care
 - **GPIO9** — BOOT button

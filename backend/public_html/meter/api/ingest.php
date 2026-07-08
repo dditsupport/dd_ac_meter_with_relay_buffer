@@ -56,6 +56,10 @@ $rtc_drift_epoch = (int)($body['rtc_drift_epoch'] ?? 0);
 // Device-reported connected-AP Wi-Fi signal strength (optional), dBm (signed).
 $wifi_rssi = array_key_exists('wifi_rssi', $body) ? (int)$body['wifi_rssi'] : null;
 
+// Device-reported CR2032 coin-cell (RTC backup) voltage (optional), millivolts.
+$coincell_mv = array_key_exists('coincell_mv', $body) ? (int)$body['coincell_mv'] : null;
+if ($coincell_mv !== null && $coincell_mv < 0) $coincell_mv = null;
+
 if ($device_id === '' || $current_bid <= 0) {
     log_ingest($device_id, 0, 0, 'missing_fields', null);
     json_response(400, ['ok' => false, 'error' => 'missing_fields']);
@@ -148,6 +152,28 @@ if ($wifi_rssi !== null) {
             )->execute([$wifi_rssi, $device_id, date('Y-m-d H:i:s', $rtc_drift_epoch)]);
         } catch (Throwable $e) {
             // rssi_dbm column not present yet — ignore.
+        }
+    }
+}
+
+// Cache the latest coin-cell voltage (mV) for the admin list, and tag the
+// current hourly drift sample with it. Separate guarded blocks so a DB without
+// migration 009 (coincell_mv columns) still logs drift, RSSI, and ingests.
+if ($coincell_mv !== null) {
+    try {
+        $pdo->prepare('UPDATE ed_device_meta SET coincell_mv = ? WHERE device_id = ?')
+            ->execute([$coincell_mv, $device_id]);
+    } catch (Throwable $e) {
+        // coincell_mv column not present yet — ignore.
+    }
+    if ($rtc_drift_sec !== null && $rtc_drift_epoch > 0) {
+        try {
+            $pdo->prepare(
+                'UPDATE ed_rtc_drift_log SET coincell_mv = ?
+                  WHERE device_id = ? AND measured_at = ?'
+            )->execute([$coincell_mv, $device_id, date('Y-m-d H:i:s', $rtc_drift_epoch)]);
+        } catch (Throwable $e) {
+            // coincell_mv column not present yet — ignore.
         }
     }
 }
