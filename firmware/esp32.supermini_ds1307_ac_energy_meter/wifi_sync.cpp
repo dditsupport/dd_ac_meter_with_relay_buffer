@@ -35,6 +35,18 @@ static volatile uint32_t s_scan_version = 0;
 // for its first 15-min log row.
 static uint64_t s_last_successful_post_us = 0;
 
+// Last STA disconnect reason code, captured from the Wi-Fi event so the connect
+// failure log can say *why* it failed. Common codes: 15 =
+// 4WAY_HANDSHAKE_TIMEOUT (wrong password), 2 = AUTH_EXPIRE, 201 = NO_AP_FOUND,
+// 205 = CONNECTION_FAIL. 0 = none captured yet.
+static volatile uint8_t s_last_disc_reason = 0;
+
+static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    s_last_disc_reason = info.wifi_sta_disconnected.reason;
+  }
+}
+
 static void set_wifi_status(WifiStatus st) {
   if (state_lock()) {
     g_state.wifi_status = st;
@@ -90,7 +102,12 @@ static bool try_connect_known() {
   // network is stored (MAX_WIFI_CREDS == 1).
   for (size_t i = 0; i < n; ++i) {
     set_wifi_status(WIFI_CONNECTING);
-    LOG_PRINTF("[wifi] connecting to \"%s\" ...\n", creds[i].ssid.c_str());
+    // Print the exact SSID and password being used so the credential in NVS can
+    // be verified against the router. (Diagnostic: the password is echoed in
+    // clear text on the serial console.)
+    LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" ...\n",
+                  creds[i].ssid.c_str(), creds[i].password.c_str());
+    s_last_disc_reason = 0;
     WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED &&
@@ -104,11 +121,13 @@ static bool try_connect_known() {
                     WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
       return true;
     }
-    // Report the terminal status so the console distinguishes a wrong password
-    // (WL_CONNECT_FAILED=4) from "AP not found" (WL_NO_SSID_AVAIL=1) from a
-    // plain timeout/disconnect (WL_DISCONNECTED=6).
-    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d)\n",
-                  creds[i].ssid.c_str(), (int)WiFi.status());
+    // Report the terminal status AND the STA disconnect reason so the console
+    // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
+    // AP-not-found (reason 201 = NO_AP_FOUND) from an auth failure. status is
+    // the Arduino wl_status_t (6 = WL_DISCONNECTED).
+    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
+                  creds[i].ssid.c_str(), (int)WiFi.status(),
+                  (int)s_last_disc_reason);
     WiFi.disconnect(true, true);
   }
   return false;
@@ -382,6 +401,8 @@ void begin() {
   // reachability is preserved without the racing background reconnector.
   WiFi.setAutoReconnect(false);
   WiFi.persistent(false);
+  // Capture STA disconnect reason codes for the connect-failure diagnostics.
+  WiFi.onEvent(on_wifi_event);
 }
 
 bool is_radio_busy() { return s_radio_busy; }
