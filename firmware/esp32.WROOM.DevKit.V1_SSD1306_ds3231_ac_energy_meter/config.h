@@ -134,10 +134,10 @@
 // AC has power; to CUT the AC we ENERGIZE it (opening the NC contact). So
 // "energize" == "cut AC", and a dead controller leaves the AC powered.
 // Drive a contactor rated for the compressor's inrush (1.5-2 ton LRA), not a
-// bare PCB relay. This board is an inverted-input (active-low) module: the pin
-// idles HIGH to keep the relay DE-ENERGIZED (AC on) and is driven LOW to
-// ENERGIZE the coil (cut AC), so RELAY_ACTIVE_HIGH is 0. Set it to 1 for a
-// board whose coil drives on a HIGH input.
+// bare PCB relay. The relay is driven through a PC817 optocoupler (inverted
+// input / active-low): the pin idles HIGH to keep the relay DE-ENERGIZED
+// (AC on) and is driven LOW to ENERGIZE the coil (cut AC), so RELAY_ACTIVE_HIGH
+// is 0. Set it to 1 for a board whose coil drives on a HIGH input.
 //
 // The AC-allowed "open hours" schedule + the two knobs below are pushed by the
 // server per device (relay_schedule / relay_compressor_watts / relay_grace_min)
