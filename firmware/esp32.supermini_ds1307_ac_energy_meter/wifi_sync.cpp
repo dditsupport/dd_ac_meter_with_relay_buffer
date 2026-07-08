@@ -57,7 +57,7 @@ static bool try_connect_known() {
   size_t n = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
   if (n == 0) return false;
 
-  // Not connected: clear any lingering "connecting" state before the scan and
+  // Not connected: clear any lingering "connecting" state before the
   // WiFi.begin() below. On the single-core ESP32-C3 (Wi-Fi sharing the core
   // with BLE), a prior failed attempt or the auto-reconnect can leave the STA
   // stuck mid-connect; the IDF then rejects the next set_config with "sta is
@@ -65,20 +65,17 @@ static bool try_connect_known() {
   // never associates. A disconnect forces the set_config to be accepted.
   WiFi.disconnect(false, false);
 
-  set_wifi_status(WIFI_SCANNING);
-  int found = WiFi.scanNetworks(false, false, false, 200);
-  if (found <= 0) return false;
-
+  // Connect by calling WiFi.begin() directly for each stored network — do NOT
+  // gate it behind a preceding WiFi.scanNetworks() match. On the single-core
+  // ESP32-C3 the radio is time-shared with BLE (NimBLE advertises/connects
+  // continuously), so a synchronous active scan often completes only partially
+  // — or returns 0 APs — even when the AP is well in range. The old scan-gated
+  // path then hit "found <= 0" (or no SSID match) and skipped WiFi.begin()
+  // entirely, so the device never associated. It also could never join a hidden
+  // SSID. Letting the IDF connection manager locate the AP's channel is both
+  // coexistence-aware and far more reliable, and it's all we need since only one
+  // network is stored (MAX_WIFI_CREDS == 1).
   for (size_t i = 0; i < n; ++i) {
-    bool match = false;
-    for (int j = 0; j < found; ++j) {
-      if (WiFi.SSID(j) == creds[i].ssid) {
-        match = true;
-        break;
-      }
-    }
-    if (!match) continue;
-
     set_wifi_status(WIFI_CONNECTING);
     WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
     uint32_t start = millis();
