@@ -57,6 +57,14 @@ static bool try_connect_known() {
   size_t n = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
   if (n == 0) return false;
 
+  // Not connected: clear any lingering "connecting" state before the scan and
+  // WiFi.begin() below. On the single-core ESP32-C3 (Wi-Fi sharing the core
+  // with BLE), a prior failed attempt or the auto-reconnect can leave the STA
+  // stuck mid-connect; the IDF then rejects the next set_config with "sta is
+  // connecting, cannot set config", so the fresh credentials never apply and it
+  // never associates. A disconnect forces the set_config to be accepted.
+  WiFi.disconnect(false, false);
+
   set_wifi_status(WIFI_SCANNING);
   int found = WiFi.scanNetworks(false, false, false, 200);
   if (found <= 0) return false;
