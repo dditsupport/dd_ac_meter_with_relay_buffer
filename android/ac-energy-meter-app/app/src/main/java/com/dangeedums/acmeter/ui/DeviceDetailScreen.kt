@@ -405,9 +405,16 @@ private fun ClaimDeviceDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // The backend field is still named capacity_kw, but it now holds
+                // the old meter's last reading (kWh) at install, added to the
+                // dashboard totals so they continue from the replaced meter.
                 OutlinedTextField(
                     value = capacityStr, onValueChange = { capacityStr = it },
-                    label = { Text("Capacity in kW (optional)") },
+                    label = { Text("Old meter reading in kWh (optional)") },
+                    supportingText = {
+                        Text("Last reading of the meter this device replaces; " +
+                             "added to the dashboard totals.")
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
