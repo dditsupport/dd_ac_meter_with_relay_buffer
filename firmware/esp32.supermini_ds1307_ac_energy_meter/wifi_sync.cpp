@@ -12,6 +12,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "esp_coexist.h"   // esp_coex_preference_set() — Wi-Fi/BLE radio sharing
 #include "log_serial.h"
 
 // TODO: HMAC payload signing as a future hardening step. For v1, the only auth
@@ -90,6 +91,13 @@ static bool try_connect_known() {
   WiFi.disconnect(false, false);
   delay(200);
 
+  // Give Wi-Fi priority on the shared radio for the duration of the connect.
+  // On the single-core ESP32-C3, BLE (NimBLE) advertising otherwise starves the
+  // 802.11 auth exchange and it expires (disconnect reason 2 = AUTH_EXPIRE)
+  // even with a strong signal. We restore the balanced preference before
+  // returning so BLE responsiveness isn't degraded once we're connected/idle.
+  esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+
   // Connect by calling WiFi.begin() directly for each stored network — do NOT
   // gate it behind a preceding WiFi.scanNetworks() match. On the single-core
   // ESP32-C3 the radio is time-shared with BLE (NimBLE advertises/connects
@@ -101,35 +109,42 @@ static bool try_connect_known() {
   // coexistence-aware and far more reliable, and it's all we need since only one
   // network is stored (MAX_WIFI_CREDS == 1).
   for (size_t i = 0; i < n; ++i) {
-    set_wifi_status(WIFI_CONNECTING);
-    // Print the exact SSID and password being used so the credential in NVS can
-    // be verified against the router. (Diagnostic: the password is echoed in
-    // clear text on the serial console.)
-    LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" ...\n",
-                  creds[i].ssid.c_str(), creds[i].password.c_str());
-    s_last_disc_reason = 0;
-    WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED &&
-           millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+    for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS; ++attempt) {
+      set_wifi_status(WIFI_CONNECTING);
+      // Print the exact SSID and password being used so the credential in NVS
+      // can be verified against the router. (Diagnostic: the password is echoed
+      // in clear text on the serial console.)
+      LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" (attempt %d/%d) ...\n",
+                    creds[i].ssid.c_str(), creds[i].password.c_str(),
+                    attempt, WIFI_CONNECT_ATTEMPTS);
+      s_last_disc_reason = 0;
+      WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
+      uint32_t start = millis();
+      while (WiFi.status() != WL_CONNECTED &&
+             millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+        delay(200);
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        set_wifi_status(WIFI_CONNECTED);
+        LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
+                      creds[i].ssid.c_str(),
+                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+        esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+        return true;
+      }
+      // Report the terminal status AND the STA disconnect reason so the console
+      // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
+      // AP-not-found (reason 201 = NO_AP_FOUND) from an auth expiry (reason 2,
+      // typically radio-coexistence starvation). status is the Arduino
+      // wl_status_t (6 = WL_DISCONNECTED).
+      LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
+                    creds[i].ssid.c_str(), (int)WiFi.status(),
+                    (int)s_last_disc_reason);
+      WiFi.disconnect(true, true);
       delay(200);
     }
-    if (WiFi.status() == WL_CONNECTED) {
-      set_wifi_status(WIFI_CONNECTED);
-      LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
-                    creds[i].ssid.c_str(),
-                    WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-      return true;
-    }
-    // Report the terminal status AND the STA disconnect reason so the console
-    // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
-    // AP-not-found (reason 201 = NO_AP_FOUND) from an auth failure. status is
-    // the Arduino wl_status_t (6 = WL_DISCONNECTED).
-    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
-                  creds[i].ssid.c_str(), (int)WiFi.status(),
-                  (int)s_last_disc_reason);
-    WiFi.disconnect(true, true);
   }
+  esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
   return false;
 }
 
