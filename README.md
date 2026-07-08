@@ -114,7 +114,7 @@ Quick path:
    ArduinoJson, NimBLE-Arduino, RTClib.
 2. Board: **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**, partition
    scheme: **No OTA (2MB APP/2MB SPIFFS)** (see `docs/PROVISIONING.md`).
-3. Open `firmware/esp32.supermini_ds1307_ac_energy_meter/ac_energy_meter.ino` and Upload.
+3. Open `firmware/esp32.supermini_ds1307_ac_energy_meter/esp32.supermini_ds1307_ac_energy_meter.ino` and Upload.
 
 ## Bench-testing without a backend
 
