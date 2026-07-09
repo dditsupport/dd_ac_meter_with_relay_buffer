@@ -141,6 +141,16 @@ static bool try_connect_known() {
                   creds[i].ssid.c_str(), creds[i].password.c_str());
     s_last_disc_reason = 0;
     WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
+    // Cap TX power immediately after begin(). The ESP32-C3 Super Mini's onboard
+    // LDO is only ~250 mA, but the radio peaks at ~335 mA in a 20 dBm TX burst;
+    // at full power the rail sags mid-burst, the PA distorts the 802.11 auth
+    // frames, the AP never decodes them, and the supplicant times out with
+    // reason 2 (AUTH_EXPIRE) — before the WPA password is ever tested. 15 dBm
+    // drops the peak to ~240 mA, under the LDO limit, and association completes.
+    // This MUST be reapplied after every begin(): the driver resets TX power on
+    // mode changes / reconnect, so a one-time call in setup() silently drifts
+    // back to max on the first reconnect.
+    WiFi.setTxPower(WIFI_TX_POWER);
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED &&
            millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
