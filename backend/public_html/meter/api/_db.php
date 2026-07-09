@@ -111,6 +111,26 @@ function require_device_auth(): void {
 /* ---------- Browser sessions ---------- */
 function start_user_session(): void {
     if (session_status() === PHP_SESSION_ACTIVE) return;
+
+    // Keep the server-side session data alive as long as the login cookie.
+    // PHP's default session.gc_maxlifetime is only ~24 minutes, so without this
+    // the session file is garbage-collected long before the SESSION_LIFETIME
+    // cookie expires — the user is silently logged out ~24 min after their last
+    // request and lands on the login screen every time they reopen the app,
+    // even though the app still holds a valid cookie.
+    ini_set('session.gc_maxlifetime', (string)SESSION_LIFETIME);
+
+    // Best-effort: keep our session files in an app-private directory outside
+    // the document root (next to meter_secrets/), so the shared host's own
+    // system-wide /tmp GC cron — which uses its maxlifetime, not ours — can't
+    // reap them early. Falls back to the default save path if we can't create
+    // or write it. NB: changing the save path logs everyone out once, since the
+    // old session files no longer resolve.
+    $sess_dir = dirname(__DIR__, 3) . '/meter_sessions';
+    if ((is_dir($sess_dir) || @mkdir($sess_dir, 0700, true)) && is_writable($sess_dir)) {
+        session_save_path($sess_dir);
+    }
+
     session_set_cookie_params([
         'lifetime' => SESSION_LIFETIME,
         'path'     => '/',
@@ -120,11 +140,26 @@ function start_user_session(): void {
     ]);
     session_name('meter_sess');
     session_start();
-    // Idle timeout
+
+    // Sliding idle timeout: only drop the session after a full SESSION_LIFETIME
+    // of genuine inactivity.
     if (isset($_SESSION['last_activity']) &&
         time() - $_SESSION['last_activity'] > SESSION_LIFETIME) {
         session_unset();
         session_destroy();
+    } elseif (!empty($_SESSION['user_id']) && !headers_sent()) {
+        // Slide the cookie forward on each authenticated request. PHP does not
+        // resend the session cookie on its own, so it would otherwise keep its
+        // original login-time expiry and lapse SESSION_LIFETIME after login no
+        // matter how actively the app is used. Re-issuing it keeps a user who
+        // keeps opening the app logged in indefinitely.
+        setcookie(session_name(), session_id(), [
+            'expires'  => time() + SESSION_LIFETIME,
+            'path'     => '/',
+            'secure'   => !empty($_SERVER['HTTPS']),
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
     }
     $_SESSION['last_activity'] = time();
 }

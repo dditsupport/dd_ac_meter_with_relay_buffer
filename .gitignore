@@ -23,6 +23,10 @@ venv/
 
 # Backend: real secrets never leave the host
 backend/public_html/_config/secrets.php
+# Backend: PHP session files (app-private save_path resolves to backend/ in a
+# local checkout; on the host it lives above public_html). Never commit these.
+backend/meter_sessions/
+meter_sessions/
 
 # Android build / machine-specific (keep gradlew + gradle/wrapper)
 android/**/local.properties
