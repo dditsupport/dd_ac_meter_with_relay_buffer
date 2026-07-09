@@ -73,7 +73,6 @@ static String s_last_relay_json = "";
 static uint32_t s_last_pushed_scan_version = 0;
 static WifiStatus s_last_pushed_wifi_status = WIFI_IDLE;
 
-static volatile bool s_started = false;   // true once begin() has run NimBLE init
 static volatile bool s_client_connected = false;
 static volatile bool s_streaming_active = false;
 static volatile bool s_stream_requested = false;
@@ -565,7 +564,6 @@ void begin() {
   adv->enableScanResponse(true);  // NimBLE 2.x renamed setScanResponse()
   adv->start();
 
-  s_started = true;
   set_ble_status(BLE_ADVERTISING);
   LOG_PRINTF("[ble] advertising as %s\n", identity::ble_name().c_str());
 }
@@ -644,27 +642,6 @@ bool is_alive() {
   if (s_client_connected) return true;
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   return adv != nullptr && adv->isAdvertising();
-}
-
-void pause_advertising() {
-  if (!s_started) return;   // BLE not up yet (Wi-Fi-first boot) — nothing to do
-  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  if (adv != nullptr && adv->isAdvertising()) {
-    adv->stop();
-    LOG_PRINTLN("[ble] advertising paused for Wi-Fi connect");
-  }
-}
-
-void resume_advertising() {
-  if (!s_started) return;
-  // A connected client already keeps BLE alive, and advertising auto-restarts
-  // on that client's disconnect, so don't force it here.
-  if (s_client_connected) return;
-  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  if (adv != nullptr && !adv->isAdvertising()) {
-    adv->start();
-    LOG_PRINTLN("[ble] advertising resumed");
-  }
 }
 
 }  // namespace ble_service

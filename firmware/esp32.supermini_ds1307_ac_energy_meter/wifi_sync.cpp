@@ -7,7 +7,6 @@
 #include "rtc.h"
 #include "led.h"
 #include "relay.h"
-#include "ble_service.h"   // pause/resume advertising during the Wi-Fi connect
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -91,20 +90,9 @@ static bool try_connect_known() {
   WiFi.disconnect(false, false);
   delay(200);
 
-  // Pause BLE advertising for the whole connect window. On the single-core
-  // ESP32-C3 the radio is time-shared with BLE in software, and NimBLE
-  // advertising starves the 802.11 auth exchange so it expires (disconnect
-  // reason 2 = AUTH_EXPIRE) even at a strong signal — which is exactly why the
-  // stand-alone Wi-Fi scanner (no BLE) sees the AP fine but this firmware could
-  // not associate. With advertising stopped, Wi-Fi owns the radio for auth /
-  // assoc / the WPA handshake. Advertising is resumed before we return.
-  ble_service::pause_advertising();
-  delay(100);
-
-  // Report the target AP's signal level as this device sees it. Now that BLE is
-  // paused the scan is reliable (unlike a scan run alongside BLE). This is
-  // informational only — we always attempt the connect below, so a hidden SSID
-  // or a scan miss never blocks it.
+  // Report the target AP's signal level as this device sees it. Informational
+  // only — we always attempt the connect below, so a scan miss (the C3's scan
+  // intermittently drops a weak AP) or a hidden SSID never blocks it.
   int found = WiFi.scanNetworks(false, true, false, 300);
   for (size_t i = 0; i < n; ++i) {
     bool seen = false;
@@ -175,9 +163,6 @@ static bool try_connect_known() {
     WiFi.disconnect(true, true);
   }
 
-  // Restore advertising whether or not we connected, so the app can still reach
-  // the device over BLE between Wi-Fi cycles.
-  ble_service::resume_advertising();
   return connected;
 }
 
