@@ -15,6 +15,7 @@ $base_cols  = 'd.device_id, d.friendly_name, d.location, l.location_name, d.capa
 $opt_relay  = ', m.relay_on, m.relay_mode, m.relay_reported_at';
 $opt_drift  = ', m.rtc_drift_sec, m.rtc_drift_at';
 $opt_rssi   = ', m.wifi_rssi';
+$opt_coin   = ', m.coincell_mv';
 $opt_pin    = ', d.ble_pin';
 $from       = ' FROM ed_energy_devices d
                 LEFT JOIN ed_users               u ON u.id = d.owner_user_id
@@ -29,6 +30,7 @@ $from       = ' FROM ed_energy_devices d
 $RELAY_CONV_FW = '2.0.0';
 $devices = [];
 foreach ([
+    $opt_pin . $opt_relay . $opt_drift . $opt_rssi . $opt_coin,
     $opt_pin . $opt_relay . $opt_drift . $opt_rssi,
     $opt_pin . $opt_relay . $opt_drift,
     $opt_pin . $opt_relay,
@@ -160,6 +162,9 @@ $locations = $pdo->query(
             <?php endif; ?>
             <?php if (isset($d['wifi_rssi']) && $d['wifi_rssi'] !== null): ?>
               <span class="dev-meta" title="Connected-AP Wi-Fi signal at the last report">Signal: <b><?= (int)$d['wifi_rssi'] ?> dBm</b></span>
+            <?php endif; ?>
+            <?php if (isset($d['coincell_mv']) && $d['coincell_mv'] !== null): ?>
+              <span class="dev-meta" title="CR2032 RTC-backup coin-cell voltage at the last report — replace when it nears ~2.0 V">Coin cell: <b><?= number_format((int)$d['coincell_mv'] / 1000, 2) ?> V<?= (int)$d['coincell_mv'] < 2500 ? ' (low)' : '' ?></b></span>
             <?php endif; ?>
             <span class="col-relay"
                   data-on="<?= array_key_exists('relay_on', $d) && $d['relay_on'] !== null ? (int)$d['relay_on'] : '' ?>"

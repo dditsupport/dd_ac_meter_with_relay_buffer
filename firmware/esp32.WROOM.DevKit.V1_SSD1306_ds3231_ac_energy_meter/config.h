@@ -121,6 +121,21 @@
 #define LED_BLINK_TX_MS         60        // toggle period during a data POST
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
 
+// ---------- Coin-cell (RTC backup) voltage sense ----------
+// Averaged ADC read of the CR2032 coin cell that backs up the DS3231 RTC,
+// reported on each ingest POST as `coincell_mv` (millivolts) alongside
+// wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
+// lost. GPIO35 is an input-only ADC1 channel (ADC1_CH7) on the WROOM DevKit V1
+// — it can't drive anything, so it's an ideal pure sense line, and being on
+// ADC1 means Wi-Fi doesn't disturb the reading. A fresh CR2032 is ~3.0 V and
+// its end-of-life is ~2.0 V, so it stays within the ~0–3.1 V (ADC_11db)
+// full-scale range and needs NO divider (ratio 1.0). If you ever sense a
+// higher node through a divider, set COINCELL_DIVIDER_RATIO to
+// (R_top + R_bottom) / R_bottom so the reported millivolts stay cell-referred.
+#define PIN_COINCELL_ADC        35
+#define COINCELL_DIVIDER_RATIO  1.0f
+#define COINCELL_ADC_SAMPLES    16
+
 // ---------- Factory reset button ----------
 // Long-press the on-board BOOT button (GPIO 0) to zero the PZEM energy register
 // — intended for a fresh install only. GPIO 0 is a strapping pin, so it must be

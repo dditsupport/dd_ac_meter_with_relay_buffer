@@ -123,6 +123,20 @@
 #define LED_BLINK_TX_MS         60        // toggle period during a data POST
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
 
+// ---------- Coin-cell (RTC backup) voltage sense ----------
+// Averaged ADC read of the CR2032 coin cell that backs up the DS1307 RTC,
+// reported on each ingest POST as `coincell_mv` (millivolts) alongside
+// wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
+// lost. GPIO4 = ADC1_CH4 on the ESP32-C3 (non-strapping, free); being on ADC1
+// means Wi-Fi activity doesn't disturb the reading. A fresh CR2032 is ~3.0 V
+// and its end-of-life is ~2.0 V, so it stays within the ~0–3.1 V (ADC_11db)
+// full-scale range and needs NO divider (ratio 1.0). If you ever sense a
+// higher node through a divider, set COINCELL_DIVIDER_RATIO to
+// (R_top + R_bottom) / R_bottom so the reported millivolts stay cell-referred.
+#define PIN_COINCELL_ADC        4
+#define COINCELL_DIVIDER_RATIO  1.0f
+#define COINCELL_ADC_SAMPLES    16
+
 // ---------- Factory reset button ----------
 // Long-press the on-board BOOT button (GPIO 9) to zero the PZEM energy register
 // — intended for a fresh install only. GPIO 9 is the C3's download-mode
