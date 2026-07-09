@@ -130,7 +130,11 @@ void setup() {
     }
   }
 
-  ble_service::begin();
+  // NB: ble_service::begin() is intentionally NOT called here. On the
+  // single-core ESP32-C3 the BLE controller starves the initial Wi-Fi 802.11
+  // auth (disconnect reason 2 = AUTH_EXPIRE), so the first association only
+  // lands reliably while BLE is still off. connectivity_task() runs the first
+  // Wi-Fi cycle on a clean radio, then brings BLE up for config / fallback.
   wifi_sync::begin();
   led::begin();
   relay::begin();
@@ -395,35 +399,53 @@ static void connectivity_task(void *) {
   esp_task_wdt_add(nullptr);
   uint64_t last_wifi_us     = time_source::monotonic_us();
   uint64_t last_ble_alive_us = time_source::monotonic_us();
-  // Run a Wi-Fi cycle quickly on first boot too — wait one interval to let
-  // the rest of the system settle.
-  bool first_cycle = true;
+  bool ble_started    = false;   // BLE is brought up after the first Wi-Fi cycle
+  bool did_first_wifi = false;
 
   for (;;) {
     esp_task_wdt_reset();
-    ble_service::tick();
-    if (ble_service::is_alive()) {
-      last_ble_alive_us = time_source::monotonic_us();
+    if (ble_started) {
+      ble_service::tick();
+      if (ble_service::is_alive()) {
+        last_ble_alive_us = time_source::monotonic_us();
+      }
     }
 
     if (!health::boot_loop_tripped()) {
-      // On-demand scan requested via BLE Wi-Fi Config write of {"action":"scan"}.
-      if (wifi_sync::consume_scan_request()) {
-        wifi_sync::run_scan();
-        ble_service::tick();  // push the fresh results immediately
-      }
-
-      uint64_t now_us = time_source::monotonic_us();
-      uint64_t since_us = now_us - last_wifi_us;
-      uint64_t interval_us = (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
-      bool periodic_due = first_cycle ? (since_us > 30ULL * 1000000ULL)
-                                       : (since_us >= interval_us);
-      bool triggered = wifi_sync::consume_immediate_sync_request();
-      if (periodic_due || triggered) {
-        first_cycle = false;
-        last_wifi_us = now_us;
+      // First Wi-Fi cycle runs immediately, on a clean radio, BEFORE BLE is
+      // initialized: on the single-core C3 the BLE controller starves the
+      // initial 802.11 auth (reason 2 = AUTH_EXPIRE), so the association only
+      // lands reliably while BLE is off. Once the link is up, steady-state
+      // coexistence with BLE is fine.
+      if (!did_first_wifi) {
         wifi_sync::run_cycle();
+        did_first_wifi = true;
+        last_wifi_us = time_source::monotonic_us();
+      } else {
+        // On-demand scan requested via BLE Wi-Fi Config write of {"action":"scan"}.
+        if (wifi_sync::consume_scan_request()) {
+          wifi_sync::run_scan();
+          if (ble_started) ble_service::tick();  // push the fresh results immediately
+        }
+
+        uint64_t now_us = time_source::monotonic_us();
+        uint64_t since_us = now_us - last_wifi_us;
+        bool periodic_due = since_us >= (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
+        bool triggered = wifi_sync::consume_immediate_sync_request();
+        if (periodic_due || triggered) {
+          last_wifi_us = now_us;
+          wifi_sync::run_cycle();
+        }
       }
+    }
+
+    // Bring BLE up once the first Wi-Fi attempt is done (or right away in
+    // boot-loop-tripped mode, where Wi-Fi is skipped entirely and BLE is the
+    // only way in).
+    if (!ble_started && (did_first_wifi || health::boot_loop_tripped())) {
+      ble_service::begin();
+      ble_started = true;
+      last_ble_alive_us = time_source::monotonic_us();
     }
 
     // ---- Stuck-watchdog soft reboots ---------------------------------------

@@ -123,47 +123,46 @@ static bool try_connect_known() {
   }
   if (found > 0) WiFi.scanDelete();
 
-  // Connect by calling WiFi.begin() directly for each stored network, retrying
-  // a few times per cycle since a coexistence-starved auth can expire
-  // transiently. We do NOT gate the connect on the scan above: the IDF
-  // connection manager finds the AP's channel itself, which also covers hidden
-  // SSIDs.
+  // Connect by calling WiFi.begin() directly for each stored network — a SINGLE
+  // attempt per cycle. Do NOT retry with a second WiFi.begin() here: on the
+  // single-core C3, tearing Wi-Fi down (WiFi.disconnect(true,true)) and
+  // re-begin()'ing it while the BLE controller is up deterministically crashes
+  // the coexistence stack (RISC-V panic on the 2nd begin). The natural
+  // WIFI_SCAN_INTERVAL_SEC cycle provides the retry cadence instead. We also do
+  // NOT gate on the scan above: the IDF connection manager finds the AP's
+  // channel itself, which also covers hidden SSIDs.
   bool connected = false;
   for (size_t i = 0; i < n && !connected; ++i) {
-    for (int attempt = 1; attempt <= WIFI_CONNECT_ATTEMPTS; ++attempt) {
-      set_wifi_status(WIFI_CONNECTING);
-      // Print the exact SSID and password being used so the credential in NVS
-      // can be verified against the router. (Diagnostic: the password is echoed
-      // in clear text on the serial console.)
-      LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" (attempt %d/%d) ...\n",
-                    creds[i].ssid.c_str(), creds[i].password.c_str(),
-                    attempt, WIFI_CONNECT_ATTEMPTS);
-      s_last_disc_reason = 0;
-      WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
-      uint32_t start = millis();
-      while (WiFi.status() != WL_CONNECTED &&
-             millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
-        delay(200);
-      }
-      if (WiFi.status() == WL_CONNECTED) {
-        set_wifi_status(WIFI_CONNECTED);
-        LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
-                      creds[i].ssid.c_str(),
-                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-        connected = true;
-        break;
-      }
-      // Report the terminal status AND the STA disconnect reason so the console
-      // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
-      // AP-not-found (reason 201 = NO_AP_FOUND) from an auth expiry (reason 2,
-      // typically radio-coexistence starvation). status is the Arduino
-      // wl_status_t (6 = WL_DISCONNECTED).
-      LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
-                    creds[i].ssid.c_str(), (int)WiFi.status(),
-                    (int)s_last_disc_reason);
-      WiFi.disconnect(true, true);
+    set_wifi_status(WIFI_CONNECTING);
+    // Print the exact SSID and password being used so the credential in NVS can
+    // be verified against the router. (Diagnostic: the password is echoed in
+    // clear text on the serial console.)
+    LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" ...\n",
+                  creds[i].ssid.c_str(), creds[i].password.c_str());
+    s_last_disc_reason = 0;
+    WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
       delay(200);
     }
+    if (WiFi.status() == WL_CONNECTED) {
+      set_wifi_status(WIFI_CONNECTED);
+      LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
+                    creds[i].ssid.c_str(),
+                    WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+      connected = true;
+      break;
+    }
+    // Report the terminal status AND the STA disconnect reason so the console
+    // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
+    // AP-not-found (reason 201 = NO_AP_FOUND) from an auth expiry (reason 2,
+    // typically radio-coexistence starvation). status is the Arduino
+    // wl_status_t (6 = WL_DISCONNECTED).
+    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
+                  creds[i].ssid.c_str(), (int)WiFi.status(),
+                  (int)s_last_disc_reason);
+    WiFi.disconnect(true, true);
   }
 
   // Restore advertising whether or not we connected, so the app can still reach
