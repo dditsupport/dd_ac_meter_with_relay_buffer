@@ -53,6 +53,15 @@
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define HTTP_TIMEOUT_MS         10000
 
+// Wi-Fi TX power cap. The Super Mini's onboard LDO (~250 mA) can't sustain the
+// radio's ~335 mA peak at full power (19.5 dBm); the 3V3 rail sags during a TX
+// burst and corrupts the 802.11 auth frames, so association fails with
+// disconnect reason 2 (AUTH_EXPIRE). 15 dBm keeps the peak (~240 mA) under the
+// LDO limit. Applied via WiFi.setTxPower() after EVERY WiFi.begin() (the driver
+// resets it on reconnect). If you add a stiff 3V3 supply (external LDO + local
+// 220 µF + 100 nF at the 3V3 pin), you can raise this toward WIFI_POWER_19_5dBm.
+#define WIFI_TX_POWER           WIFI_POWER_15dBm
+
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
 // Also fires once on first Wi-Fi cycle after boot, so a fresh device picks
