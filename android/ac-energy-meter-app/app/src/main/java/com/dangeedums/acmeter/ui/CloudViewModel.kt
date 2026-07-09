@@ -68,14 +68,23 @@ class CloudViewModel(
         viewModelScope.launch {
             val s = session.settings.first()
             client.setBaseUrl(s.baseUrl)
-            _ui.value = _ui.value.copy(baseUrl = s.baseUrl, username = s.username)
-            // Try a fetch to detect a still-valid session cookie. If it fails
-            // with 401 the user lands on the login screen.
-            tryAutoFetch()
+            // Optimistically restore the logged-in UI from the persisted flag so
+            // a cold start (the process was swiped away or killed for memory)
+            // lands on the dashboard, not the login screen. tryAutoFetch() then
+            // validates the persisted session cookie in the background and only
+            // drops us to login on an explicit server "unauthorized" — never on
+            // a transient network error at launch.
+            val wasLoggedIn = session.isLoggedIn()
+            _ui.value = _ui.value.copy(
+                baseUrl = s.baseUrl,
+                username = s.username,
+                loggedIn = wasLoggedIn,
+            )
+            tryAutoFetch(wasLoggedIn)
         }
     }
 
-    private suspend fun tryAutoFetch() {
+    private suspend fun tryAutoFetch(wasLoggedIn: Boolean) {
         runCatching { client.devices() }
             .onSuccess { resp ->
                 if (resp.ok) {
@@ -88,7 +97,20 @@ class CloudViewModel(
                         selectedDeviceId = resp.devices.firstOrNull()?.device_id,
                     )
                     refreshChart()
+                } else {
+                    // Server explicitly rejected the session (expired / invalid).
+                    // A real logout — clear the persisted flag so we stop
+                    // optimistically restoring a dead session on later launches.
+                    session.setLoggedIn(false)
+                    _ui.value = _ui.value.copy(loggedIn = false)
                 }
+            }
+            .onFailure {
+                // Network/transient failure at launch (offline, or the request
+                // raced device connectivity). Keep whatever logged-in state we
+                // optimistically restored — a hiccup must not sign the user out.
+                // If we were never logged in, stay on the login screen.
+                if (!wasLoggedIn) _ui.value = _ui.value.copy(loggedIn = false)
             }
     }
 
