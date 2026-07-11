@@ -22,7 +22,7 @@
 // from the companion app — no reflash needed.
 #define INGEST_HOST_DEFAULT     "https://aromen.biz"
 #define INGEST_PATH             "/meter/api/ingest.php"
-#define DEVICE_TOKEN            "hs2AfGYZqZSFbb_rp-t3zy_I_rXb5TJISpn6Okih4pg"
+#define DEVICE_TOKEN            "token"
 
 // ---------- Wi-Fi (optional bench-test fallback) ----------
 // If non-empty, the firmware writes these to NVS at boot whenever the saved
