@@ -66,6 +66,27 @@ void setup() {
   }
   pzem::begin();
 
+  // Probe the PZEM once at boot and report its status on the console (mirrors
+  // the RTC line), so a miswired / unpowered / wrong-baud meter is obvious at
+  // startup. Retry a few times since the first Modbus reads right after the
+  // UART comes up can miss.
+  {
+    PzemSample psample{};
+    bool pok = false;
+    for (int i = 0; i < 5 && !pok; ++i) {
+      pok = pzem::read(psample);
+      if (!pok) delay(200);
+    }
+    if (pok) {
+      LOG_PRINTF("[pzem] OK: V=%.1f I=%.3f P=%.1f Wh=%.0f PF=%.2f Hz=%.1f\n",
+                    psample.voltage, psample.current, psample.power,
+                    psample.energy_wh, psample.pf, psample.frequency);
+    } else {
+      LOG_PRINTLN("[pzem] ERROR: no response — check wiring (RX=GPIO20, TX=GPIO21), "
+                  "5 V power, and 9600 baud");
+    }
+  }
+
   // BOOT button for the fresh-install energy reset (long-press in loop()).
   pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
@@ -275,6 +296,18 @@ static void sampling_task(void *) {
     PzemSample sample{};
     bool ok = pzem::read(sample);
     PzemStatus st = pzem::classify(ok, sample);
+
+    // Log PZEM status transitions so a fault that develops (or clears) after
+    // boot shows up on the console, not just the one-shot probe in setup().
+    static PzemStatus last_logged_st = (PzemStatus)0xFF;  // force first log
+    if (st != last_logged_st) {
+      const char *sname = st == PZEM_OK ? "OK"
+                        : st == PZEM_STALE ? "STALE (no Modbus response)"
+                        : st == PZEM_SENSOR_FAULT ? "SENSOR_FAULT (V ~0 while on)"
+                        : "UNKNOWN";
+      LOG_PRINTF("[pzem] status: %s\n", sname);
+      last_logged_st = st;
+    }
 
     uint64_t now_us = time_source::monotonic_us();
     last_us = now_us;

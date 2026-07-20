@@ -18,6 +18,19 @@ bool begin() {
     s_available = false;
     return false;
   }
+  // Print the raw time the DS1307 is holding right now, whether or not its
+  // oscillator is running — so the boot console always shows what the chip
+  // reads once it's on the bus (a live time when wired/battery-backed, or the
+  // 2000-01-01 default after a power loss). This is separate from the
+  // "[boot] RTC time" line, which is only logged when the time is trustworthy.
+  {
+    DateTime now = s_rtc.now();
+    LOG_PRINTF("[rtc] DS1307 time: %04u-%02u-%02u %02u:%02u:%02u (epoch=%lu, %s)\n",
+               now.year(), now.month(), now.day(),
+               now.hour(), now.minute(), now.second(),
+               (unsigned long)now.unixtime(),
+               s_rtc.isrunning() ? "running" : "stopped");
+  }
   // The DS1307 halts its oscillator (CH bit set) whenever it loses power with
   // no backup battery. isRunning() reflects that bit, so a stopped clock means
   // the retained time is meaningless until we resync.
