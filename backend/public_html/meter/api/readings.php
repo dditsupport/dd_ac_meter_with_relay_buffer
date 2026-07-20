@@ -190,20 +190,31 @@ function fetch_bucketed(string $device, string $from, string $to, string $bucket
         // buckets sum exactly to the range's start->end total. The last bucket
         // has no "next", so it keeps its own max-min to absorb the tail up to
         // the latest reading.
+        // Cumulative PZEM meter reading (kWh) at the start and end of this
+        // bucket. Start = the bucket's first reading (wh_min). End = the NEXT
+        // bucket's first reading in span-to-next mode (so end-start equals the
+        // telescoping bar value and the gap between buckets is included), or
+        // this bucket's own last reading (wh_max) for the final bucket and for
+        // the non-span aggregates. Shown under each bar on the dashboard.
+        $wh_start = (float)$r['wh_min'];
         if ($spanToNext && $i < $n - 1) {
-            $kwh = wh_span_kwh((float)$r['wh_min'], (float)$rows[$i + 1]['wh_min']);
+            $kwh = wh_span_kwh($wh_start, (float)$rows[$i + 1]['wh_min']);
+            $wh_end = (float)$rows[$i + 1]['wh_min'];
         } else {
-            $kwh = max(0.0, ((float)$r['wh_max'] - (float)$r['wh_min']) / 1000.0);
+            $kwh = max(0.0, ((float)$r['wh_max'] - $wh_start) / 1000.0);
+            $wh_end = (float)$r['wh_max'];
         }
         $out[] = [
-            't'        => format_iso($r['bucket']),
-            't_end'    => format_iso($r['bucket_end']),
-            'kwh'      => round($kwh, 3),
-            'P_avg'    => round((float)$r['p_avg'], 1),
-            'P_peak'   => round((float)$r['p_peak'], 1),
-            'V_avg'    => round((float)$r['v_avg'], 1),
-            'samples'  => (int)$r['samples'],
-            'approx'   => (int)$r['approx_count'] > 0,
+            't'         => format_iso($r['bucket']),
+            't_end'     => format_iso($r['bucket_end']),
+            'kwh'       => round($kwh, 3),
+            'kwh_start' => round($wh_start / 1000.0, 3),
+            'kwh_end'   => round($wh_end   / 1000.0, 3),
+            'P_avg'     => round((float)$r['p_avg'], 1),
+            'P_peak'    => round((float)$r['p_peak'], 1),
+            'V_avg'     => round((float)$r['v_avg'], 1),
+            'samples'   => (int)$r['samples'],
+            'approx'    => (int)$r['approx_count'] > 0,
         ];
     }
     return $out;
