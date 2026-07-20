@@ -111,8 +111,8 @@
 #define PIN_PZEM_TX             21        // GPIO21 (labeled TX) -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_I2C_SDA             5         // DS1307 SDA (GPIO5, non-strapping)
-#define PIN_I2C_SCL             6         // DS1307 SCL (GPIO6, non-strapping)
+#define PIN_I2C_SDA             6         // DS1307 SDA (GPIO6, non-strapping)
+#define PIN_I2C_SCL             5         // DS1307 SCL (GPIO5, non-strapping)
 #define I2C_FREQ_HZ             100000    // DS1307 is a standard-mode (100 kHz) part
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 
@@ -131,13 +131,13 @@
 // Averaged ADC read of the CR2032 coin cell that backs up the DS1307 RTC,
 // reported on each ingest POST as `coincell_mv` (millivolts) alongside
 // wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
-// lost. GPIO4 = ADC1_CH4 on the ESP32-C3 (non-strapping, free); being on ADC1
+// lost. GPIO3 = ADC1_CH3 on the ESP32-C3 (non-strapping, free); being on ADC1
 // means Wi-Fi activity doesn't disturb the reading. A fresh CR2032 is ~3.0 V
 // and its end-of-life is ~2.0 V, so it stays within the ~0–3.1 V (ADC_11db)
 // full-scale range and needs NO divider (ratio 1.0). If you ever sense a
 // higher node through a divider, set COINCELL_DIVIDER_RATIO to
 // (R_top + R_bottom) / R_bottom so the reported millivolts stay cell-referred.
-#define PIN_COINCELL_ADC        4
+#define PIN_COINCELL_ADC        3
 #define COINCELL_DIVIDER_RATIO  1.0f
 #define COINCELL_ADC_SAMPLES    16
 

@@ -52,13 +52,13 @@ after storage init.
 | **DS1307 RTC (I²C)** | | | 100 kHz |
 | VCC | 5V rail | **5V** | DS1307 is a 4.5–5.5 V part — see caveat below |
 | GND | GND | **G** | |
-| SDA | GPIO5 | **5** | |
-| SCL | GPIO6 | **6** | |
+| SDA | GPIO6 | **6** | |
+| SCL | GPIO5 | **5** | |
 | SQW | — | — | leave disconnected |
 | **Status LED (external)** | | | |
 | Anode (→ resistor) | GPIO7 | **7** | active-high; ~330 Ω to LED, LED to GND |
 | **CR2032 coin-cell sense** | | | ADC1, no divider |
-| Cell + (→ sense) | GPIO4 | **4** | ADC1_CH4; CR2032 stays ≤3.1 V so wire straight, no divider |
+| Cell + (→ sense) | GPIO3 | **3** | ADC1_CH3; CR2032 stays ≤3.1 V so wire straight, no divider |
 | **AC-cutoff contactor** | | | |
 | IN (control) | GPIO10 | **10** | energize = cut AC (see below) |
 | VCC | 5V rail | **5V** | |
@@ -100,7 +100,7 @@ the PZEM here.
 
 - `Serial` (USB-CDC over native USB) → console / logs @ 115200.
 - `Serial1` (UART1, GPIO20 RX / GPIO21 TX) → PZEM.
-- `Wire` (GPIO5 SDA, GPIO6 SCL) → DS1307 at 100 kHz. The DS1307 is a
+- `Wire` (GPIO6 SDA, GPIO5 SCL) → DS1307 at 100 kHz. The DS1307 is a
   standard-mode part and does not support 400 kHz. Add external pull-ups
   (4.7 kΩ) if your module doesn't include them — but see the 5 V caveat
   under **Power & ground**.
@@ -121,7 +121,7 @@ all of them free of signal wiring:
 
 Unused and available (all non-strapping unless noted):
 
-- **GPIO0, GPIO1, GPIO3** (also usable as ADC A0/A1/A3)
-- **GPIO4** — used for the CR2032 coin-cell voltage sense (ADC1_CH4)
+- **GPIO0, GPIO1, GPIO4** (also usable as ADC A0/A1/A4)
+- **GPIO3** — used for the CR2032 coin-cell voltage sense (ADC1_CH3)
 - **GPIO2, GPIO8** — usable but strapping pins; wire with care
 - **GPIO9** — BOOT button

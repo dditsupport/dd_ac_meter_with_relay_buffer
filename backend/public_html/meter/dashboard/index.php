@@ -193,7 +193,39 @@ function isoLocal(d){
 }
 
 let energyChart, powerChart;
-function makeChart(canvasId, type, datasets, yLabel, xOpts){
+
+// Draws the cumulative meter reading (kWh) at the start and end of each bucket
+// just under its bar: "start" on one line, "→ end" on the next. Only shown when
+// there are few enough bars (<= 12) that the labels don't collide — so the
+// 12-month and 7-day views get them, but 30-day / hourly stay uncluttered. The
+// bar's own value equals end - start.
+const endpointLabelsPlugin = {
+  id: 'endpointLabels',
+  afterDatasetsDraw(chart) {
+    const ds = chart.data.datasets[0];
+    const meta = chart.getDatasetMeta(0);
+    if (!ds || !meta || !meta.data || meta.data.length === 0) return;
+    if (meta.data.length > 12) return;              // too many bars — skip
+    if (ds.data[0]?.s == null) return;              // not the energy (bar) chart
+    const ctx = chart.ctx;
+    const yTop = chart.scales.x.bottom + 2;         // just below the month labels
+    ctx.save();
+    ctx.font = '10px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#6b7280';
+    ctx.textAlign = 'center';
+    const fmt = v => (v == null ? '' : Number(v).toLocaleString(undefined,
+                       { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+    meta.data.forEach((bar, i) => {
+      const p = ds.data[i];
+      if (!p || p.s == null || p.e == null) return;
+      ctx.fillText(fmt(p.s), bar.x, yTop + 11);
+      ctx.fillText('→ ' + fmt(p.e), bar.x, yTop + 23);
+    });
+    ctx.restore();
+  },
+};
+
+function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints){
   const ctx = document.getElementById(canvasId).getContext('2d');
   const x = {
     type: 'time',
@@ -203,9 +235,12 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts){
   if (xOpts.max) x.max = xOpts.max.getTime();
   return new Chart(ctx, {
     type, data: { datasets },
+    plugins: showEndpoints ? [endpointLabelsPlugin] : [],
     options: {
       responsive: true, animation: false,
       parsing: { xAxisKey: 't', yAxisKey: 'y' },
+      // Reserve room under the x-axis for the start/end reading labels.
+      layout: showEndpoints ? { padding: { bottom: 28 } } : {},
       scales: {
         x,
         y: { beginAtZero: true, title: { display: true, text: yLabel } },
@@ -227,7 +262,7 @@ async function loadRange(rangeKey){
   const j   = await res.json();
   if (!j.ok) { alert('Error: ' + j.error); return; }
 
-  const energyPoints = j.points.map(p => ({ t: p.t, y: p.kwh }));
+  const energyPoints = j.points.map(p => ({ t: p.t, y: p.kwh, s: p.kwh_start, e: p.kwh_end }));
 
   // The Watt line can be finer-grained than the energy bars. When a distinct
   // powerAggregate is set, pull the power series from its own request so short
@@ -249,10 +284,10 @@ async function loadRange(rangeKey){
   };
   energyChart = makeChart('chart-energy', 'bar', [{
     label: R.energyLabel, data: energyPoints, backgroundColor: 'rgba(31,110,42,0.7)',
-  }], R.energyLabel, xOpts);
+  }], R.energyLabel, xOpts, true);
   powerChart = makeChart('chart-power', 'line', [{
     label: 'Avg power (W)', data: powerPoints, borderColor: '#c97a1a', tension: 0.25,
-  }], 'W', xOpts);
+  }], 'W', xOpts, false);
 
   // Stats. capacity_kw is repurposed as the old meter's last reading (kWh) at
   // install; add it so Period total continues from the replaced meter.
