@@ -111,8 +111,8 @@
 #define PIN_PZEM_TX             21        // GPIO21 (labeled TX) -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_I2C_SDA             5         // DS1307 SDA (GPIO5, non-strapping)
-#define PIN_I2C_SCL             6         // DS1307 SCL (GPIO6, non-strapping)
+#define PIN_I2C_SDA             6         // DS1307 SDA (GPIO6, non-strapping)
+#define PIN_I2C_SCL             5         // DS1307 SCL (GPIO5, non-strapping)
 #define I2C_FREQ_HZ             100000    // DS1307 is a standard-mode (100 kHz) part
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 

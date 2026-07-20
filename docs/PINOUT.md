@@ -52,8 +52,8 @@ after storage init.
 | **DS1307 RTC (I²C)** | | | 100 kHz |
 | VCC | 5V rail | **5V** | DS1307 is a 4.5–5.5 V part — see caveat below |
 | GND | GND | **G** | |
-| SDA | GPIO5 | **5** | |
-| SCL | GPIO6 | **6** | |
+| SDA | GPIO6 | **6** | |
+| SCL | GPIO5 | **5** | |
 | SQW | — | — | leave disconnected |
 | **Status LED (external)** | | | |
 | Anode (→ resistor) | GPIO7 | **7** | active-high; ~330 Ω to LED, LED to GND |
@@ -100,7 +100,7 @@ the PZEM here.
 
 - `Serial` (USB-CDC over native USB) → console / logs @ 115200.
 - `Serial1` (UART1, GPIO20 RX / GPIO21 TX) → PZEM.
-- `Wire` (GPIO5 SDA, GPIO6 SCL) → DS1307 at 100 kHz. The DS1307 is a
+- `Wire` (GPIO6 SDA, GPIO5 SCL) → DS1307 at 100 kHz. The DS1307 is a
   standard-mode part and does not support 400 kHz. Add external pull-ups
   (4.7 kΩ) if your module doesn't include them — but see the 5 V caveat
   under **Power & ground**.
