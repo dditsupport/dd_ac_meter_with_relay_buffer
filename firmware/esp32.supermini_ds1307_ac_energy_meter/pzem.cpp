@@ -104,7 +104,13 @@ PzemStatus classify(bool ok, const PzemSample &sample) {
 
 bool reset_energy() {
   if (!s_pzem) return false;
-  return s_pzem->resetEnergy();
+  // The reset is a single Modbus command that misses on a flaky bus just like a
+  // read, so retry it a few times before giving up.
+  for (int attempt = 0; attempt < PZEM_READ_ATTEMPTS; ++attempt) {
+    if (attempt > 0) delay(PZEM_READ_RETRY_MS);
+    if (s_pzem->resetEnergy()) return true;
+  }
+  return false;
 }
 
 static volatile bool s_reset_requested = false;

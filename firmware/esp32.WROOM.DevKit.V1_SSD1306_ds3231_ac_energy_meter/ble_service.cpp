@@ -149,6 +149,12 @@ static String build_device_info_json() {
   doc["expected_row_count"] = storage::current_unsynced_count();
   doc["wall_clock_known"] = time_source::wall_clock_known();
   doc["rtc_ok"] = rtc::available();
+  // Live PZEM lifetime meter total (kWh) so the app can show it and verify a
+  // reset actually took (the value drops to ~0 after a successful reset).
+  {
+    SharedState snap;
+    if (state_snapshot(snap)) doc["total_kwh"] = snap.total_kwh;
+  }
   // Current backend host as actually used by wifi_sync (NVS or compiled
   // default), plus the firmware-hardcoded path so the app can show the
   // full effective URL.

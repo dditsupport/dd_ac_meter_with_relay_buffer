@@ -72,6 +72,13 @@
 #define PZEM_FAIL_THRESHOLD     3         // consecutive Modbus fails -> PZEM ERROR
 #define SENSOR_LOW_V_THRESHOLD  50.0f     // V < this for SENSOR_FAULT_WINDOW = SENSOR? fault
 #define SENSOR_FAULT_WINDOW_SEC 60
+// Per-sample PZEM read/reset retries. A single Modbus transaction occasionally
+// misses (bus noise, marginal levels/grounding), which flapped the status
+// OK<->STALE and made the energy reset need several taps. Retry a couple times
+// before declaring failure. The delay must exceed the library's ~200 ms value
+// cache so each retry forces a fresh transaction.
+#define PZEM_READ_ATTEMPTS      3
+#define PZEM_READ_RETRY_MS      250
 
 // ---------- Demo mode ----------
 // Set to 1 to bypass the real PZEM and feed the rest of the firmware

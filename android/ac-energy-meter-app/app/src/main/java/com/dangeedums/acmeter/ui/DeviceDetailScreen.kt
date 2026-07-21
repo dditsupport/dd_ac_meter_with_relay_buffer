@@ -128,6 +128,11 @@ fun DeviceDetailScreen(
             Button(onClick = { vm.connect() }) { Text("Retry connect") }
         }
 
+        ui.notice?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.primary)
+        }
+
         ui.info?.let { info ->
             Spacer(Modifier.height(12.dp))
             InfoCard(info, ui.wifi)
@@ -253,6 +258,7 @@ private fun InfoCard(
             Field("Boot ID",   "${info.currentBootId}  (uptime ${info.uptimeSec}s)")
             Field("Last seq",  info.lastSeq.toString())
             Field("Unsynced",  info.unsyncedCount.toString())
+            info.totalKwh?.let { Field("Meter total", "%.3f kWh".format(it)) }
             Field("RTC",       if (info.rtcOk) "ok" else "missing / lost power")
             Field("Wall clock",if (info.wallClockKnown) "known" else "unknown")
             Field("Log interval", "${info.logIntervalSec}s")

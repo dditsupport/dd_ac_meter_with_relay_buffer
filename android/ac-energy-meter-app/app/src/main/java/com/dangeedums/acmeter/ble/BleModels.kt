@@ -21,6 +21,7 @@ data class DeviceInfoBle(
     @SerialName("ingest_host")        val ingestHost: String = "",
     @SerialName("ingest_path")        val ingestPath: String = "",
     @SerialName("log_interval_sec")   val logIntervalSec: Int = 900,
+    @SerialName("total_kwh")          val totalKwh: Double? = null,
 )
 
 @Serializable

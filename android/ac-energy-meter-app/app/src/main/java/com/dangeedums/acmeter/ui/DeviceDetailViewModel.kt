@@ -54,6 +54,7 @@ data class DeviceDetailUi(
     val wifi: com.dangeedums.acmeter.ble.WifiStatus? = null,
     val relay: com.dangeedums.acmeter.ble.RelayState? = null,
     val error: String? = null,
+    val notice: String? = null,
     val syncStage: SyncStage = SyncStage.Idle,
     val syncRows: Int = 0,
     val syncMessage: String = "",
@@ -231,14 +232,28 @@ class DeviceDetailViewModel(
     }
 
     /** Zero the PZEM cumulative energy register over BLE (destructive; the
-     *  firmware defers the actual reset to its sampling task). Refresh the info
-     *  card afterwards so the new near-zero total shows. */
+     *  firmware defers the actual reset to its sampling task, which retries the
+     *  Modbus command). Verify by re-reading the meter total and reporting
+     *  success/failure to the UI. */
     fun resetEnergy() {
         viewModelScope.launch {
-            runCatching { gatt.resetEnergy() }
-                .onFailure { _ui.value = _ui.value.copy(error = "reset energy: ${it.message}") }
-            kotlinx.coroutines.delay(1500)   // let the device perform the reset
+            _ui.value = _ui.value.copy(notice = null, error = null)
+            val before = _ui.value.info?.totalKwh
+            val sent = runCatching { gatt.resetEnergy() }.isSuccess
+            if (!sent) {
+                _ui.value = _ui.value.copy(error = "Reset failed — couldn't reach the device")
+                return@launch
+            }
+            kotlinx.coroutines.delay(1800)   // let the device perform the (retried) reset
             readInfoNow()
+            val after = _ui.value.info?.totalKwh
+            val ok = after != null &&
+                (after < 0.02 || (before != null && after < before - 0.005))
+            _ui.value = if (ok) {
+                _ui.value.copy(notice = "Energy meter reset to 0 ✓", error = null)
+            } else {
+                _ui.value.copy(error = "Reset didn't take — bus busy, try again")
+            }
         }
     }
 
