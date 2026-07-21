@@ -47,22 +47,31 @@ bool read(PzemSample &out) {
   return true;
 #else
   if (!s_pzem) return false;
-  float v = s_pzem->voltage();
-  float i = s_pzem->current();
-  float p = s_pzem->power();
-  float e = s_pzem->energy();
-  float pf = s_pzem->pf();
-  float f = s_pzem->frequency();
-  if (isnan(v) || isnan(i) || isnan(p) || isnan(e) || isnan(pf) || isnan(f)) {
-    return false;
+  // Retry a missed Modbus transaction a couple times before failing. Each
+  // s_pzem->voltage() call refreshes all registers in one transaction (the
+  // rest read from that same cached update), so we only need to re-trigger it.
+  // The inter-try delay is longer than the library's value cache so the retry
+  // is a genuinely fresh read, not the same cached NaN.
+  for (int attempt = 0; attempt < PZEM_READ_ATTEMPTS; ++attempt) {
+    if (attempt > 0) delay(PZEM_READ_RETRY_MS);
+    float v = s_pzem->voltage();
+    float i = s_pzem->current();
+    float p = s_pzem->power();
+    float e = s_pzem->energy();
+    float pf = s_pzem->pf();
+    float f = s_pzem->frequency();
+    if (isnan(v) || isnan(i) || isnan(p) || isnan(e) || isnan(pf) || isnan(f)) {
+      continue;  // transaction missed — try again
+    }
+    out.voltage = v;
+    out.current = i;
+    out.power = p;
+    out.energy_wh = e * 1000.0f;  // library returns kWh
+    out.pf = pf;
+    out.frequency = f;
+    return true;
   }
-  out.voltage = v;
-  out.current = i;
-  out.power = p;
-  out.energy_wh = e * 1000.0f;  // library returns kWh
-  out.pf = pf;
-  out.frequency = f;
-  return true;
+  return false;
 #endif
 }
 

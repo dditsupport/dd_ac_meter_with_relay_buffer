@@ -81,6 +81,14 @@
 #define PZEM_FAIL_THRESHOLD     3         // consecutive Modbus fails -> PZEM ERROR
 #define SENSOR_LOW_V_THRESHOLD  50.0f     // V < this for SENSOR_FAULT_WINDOW = SENSOR? fault
 #define SENSOR_FAULT_WINDOW_SEC 60
+// Per-sample PZEM read retries. A single Modbus transaction to the PZEM-004T
+// occasionally misses (radio activity on the single-core C3, marginal 5 V TTL
+// levels / grounding, or bus noise), which made the status flap OK<->STALE.
+// Retry the read a couple times before declaring the sample failed. The delay
+// must exceed the library's ~200 ms value cache so each retry forces a fresh
+// transaction rather than returning the same stale (NaN) cached read.
+#define PZEM_READ_ATTEMPTS      3
+#define PZEM_READ_RETRY_MS      250
 
 // ---------- Demo mode ----------
 // Set to 1 to bypass the real PZEM and feed the rest of the firmware
