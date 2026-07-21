@@ -35,6 +35,24 @@ class DeviceStore(private val store: DataStore<Preferences>) {
         }
     }
 
+    /** Patch a saved device's canonical id and/or friendly name in place,
+     *  keeping its name/address/addedAt. No-op if the address isn't saved or
+     *  both values are null. */
+    suspend fun updateMeta(address: String, id: String?, friendlyName: String?) {
+        if (id == null && friendlyName == null) return
+        store.edit { prefs ->
+            val current = prefs[key]
+                ?.let { runCatching { json.decodeFromString<List<Device>>(it) }.getOrNull() }
+                ?: emptyList()
+            val updated = current.map {
+                if (it.address == address)
+                    it.copy(id = id ?: it.id, friendlyName = friendlyName ?: it.friendlyName)
+                else it
+            }
+            prefs[key] = json.encodeToString(updated)
+        }
+    }
+
     suspend fun remove(address: String) {
         store.edit { prefs ->
             val current = prefs[key]

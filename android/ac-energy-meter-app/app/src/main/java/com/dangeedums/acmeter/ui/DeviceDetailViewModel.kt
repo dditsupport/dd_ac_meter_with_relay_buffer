@@ -72,6 +72,7 @@ class DeviceDetailViewModel(
     private val session: CloudSessionStore,
     private val blePinStore: BlePinStore,
     private val unlockRegistry: BleUnlockRegistry,
+    private val deviceStore: com.dangeedums.acmeter.data.DeviceStore,
 ) : AndroidViewModel(application) {
 
     private val peripheral = peripheralForAddress(address)
@@ -181,6 +182,10 @@ class DeviceDetailViewModel(
             access = AccessState.Unlocked, connState = ConnState.Connected,
             info = info, pinError = false, error = null,
         )
+        // Cache the canonical device_id (and cloud friendly name, if signed in)
+        // onto the saved-device entry so "My devices" can show the friendly name
+        // instead of the MAC-derived placeholder. Best-effort, non-blocking.
+        persistDeviceMeta(id)
         // Set wall time from the phone — best-effort, helps the device if its
         // RTC is missing/dead.
         runCatching { gatt.setWallTime(nowIso()) }
@@ -198,6 +203,23 @@ class DeviceDetailViewModel(
             .onEach { _ui.value = _ui.value.copy(relay = it) }
             .catch { /* connection ended; ignore */ }
             .launchIn(viewModelScope)
+    }
+
+    /** Cache the canonical device_id and (when signed into the Cloud tab) the
+     *  cloud friendly name onto the saved-device entry, so "My devices" shows
+     *  the friendly name. Best-effort. */
+    private fun persistDeviceMeta(id: String) {
+        viewModelScope.launch {
+            val friendly = runCatching {
+                if (session.isLoggedIn())
+                    cloud.devices().devices
+                        .firstOrNull { it.device_id.equals(id, ignoreCase = true) }
+                        ?.friendly_name
+                        ?.takeIf { it.isNotBlank() }
+                else null
+            }.getOrNull()
+            runCatching { deviceStore.updateMeta(address, id, friendly) }
+        }
     }
 
     private fun lockAndDisconnect(state: AccessState, message: String) {
@@ -471,6 +493,7 @@ class DeviceDetailViewModel(
                     application, address,
                     app.cloudClient, app.cloudSessionStore,
                     app.blePinStore, app.bleUnlockRegistry,
+                    app.deviceStore,
                 )
             }
         }

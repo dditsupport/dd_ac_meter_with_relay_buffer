@@ -18,5 +18,8 @@ data class Device(
     val name: String,
     val address: String,
     val id: String? = null,
+    /** Cloud-assigned friendly name (e.g. "test1"), cached on the last connect
+     *  while signed into the Cloud tab. Shown as the list title when present. */
+    val friendlyName: String? = null,
     val addedAtEpochMs: Long = System.currentTimeMillis(),
 )

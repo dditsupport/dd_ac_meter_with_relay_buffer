@@ -62,7 +62,19 @@ fun SavedDevicesScreen(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(text = device.name, fontWeight = FontWeight.SemiBold)
+                        // Prefer the cloud friendly name (cached on last connect);
+                        // fall back to the BLE/placeholder name.
+                        Text(
+                            text = device.friendlyName ?: device.name,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (device.friendlyName != null) {
+                            Text(
+                                text = device.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Text(
                             text = device.address,
                             style = MaterialTheme.typography.bodySmall,
