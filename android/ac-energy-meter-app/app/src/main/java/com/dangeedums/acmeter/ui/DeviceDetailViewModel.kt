@@ -230,6 +230,18 @@ class DeviceDetailViewModel(
         }
     }
 
+    /** Zero the PZEM cumulative energy register over BLE (destructive; the
+     *  firmware defers the actual reset to its sampling task). Refresh the info
+     *  card afterwards so the new near-zero total shows. */
+    fun resetEnergy() {
+        viewModelScope.launch {
+            runCatching { gatt.resetEnergy() }
+                .onFailure { _ui.value = _ui.value.copy(error = "reset energy: ${it.message}") }
+            kotlinx.coroutines.delay(1500)   // let the device perform the reset
+            readInfoNow()
+        }
+    }
+
     /** Suspending device-info read so callers can await it (e.g. after a sync). */
     private suspend fun readInfoNow() {
         runCatching { gatt.readDeviceInfo() }

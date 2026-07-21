@@ -24,4 +24,7 @@ object BleUuids {
     val WIFI_SCAN       : UUID = UUID.fromString("d4346c1c-6e36-4a0f-a164-84cd396a4697")
     val SERVER_CONFIG   : UUID = UUID.fromString("9478f8ff-cb2f-4447-8a2f-49791de6bc09")
     val RELAY           : UUID = UUID.fromString("8c5a2e91-6f3d-4b27-9a1c-0e7d3f8b6a52")
+
+    // Write-only: zero the PZEM cumulative energy register (auth + confirmation).
+    val PZEM_RESET      : UUID = UUID.fromString("b7e6a1d4-3c2f-4e88-9a5b-6d0f21c8e743")
 }

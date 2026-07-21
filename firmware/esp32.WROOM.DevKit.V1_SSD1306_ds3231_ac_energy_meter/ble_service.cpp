@@ -7,6 +7,7 @@
 #include "wifi_sync.h"
 #include "rtc.h"
 #include "relay.h"
+#include "pzem.h"
 
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
@@ -67,6 +68,7 @@ static NimBLECharacteristic *s_char_wifi_status = nullptr;
 static NimBLECharacteristic *s_char_wifi_scan = nullptr;
 static NimBLECharacteristic *s_char_server_cfg = nullptr;
 static NimBLECharacteristic *s_char_relay = nullptr;
+static NimBLECharacteristic *s_char_pzem_reset = nullptr;
 static NimBLECharacteristic *s_char_auth_chal = nullptr;
 static NimBLECharacteristic *s_char_auth_resp = nullptr;
 static String s_last_relay_json = "";
@@ -332,6 +334,29 @@ class RelayCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+// Zero the PZEM cumulative energy register. Destructive, so it is gated on BLE
+// auth AND an explicit confirmation payload: {"action":"reset_energy"}. The
+// actual Modbus reset is deferred to the sampling task via pzem::request_reset()
+// so it never races a concurrent read.
+class PzemResetCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    if (!is_authed(info)) return;
+    std::string v = c->getValue();
+    StaticJsonDocument<96> doc;
+    if (deserializeJson(doc, v)) {
+      LOG_PRINTF("[ble] pzem-reset bad json: %s\n", v.c_str());
+      return;
+    }
+    String action = (const char *)(doc["action"] | "");
+    if (action != "reset_energy") {
+      LOG_PRINTF("[ble] pzem-reset ignored (action=%s)\n", action.c_str());
+      return;
+    }
+    pzem::request_reset();
+    LOG_PRINTLN("[ble] energy-register reset requested by app");
+  }
+};
+
 class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
     if (!is_authed(info)) return;
@@ -555,6 +580,11 @@ void begin() {
   s_last_relay_json = relay::status_json();
   s_char_relay->setValue(to_std(s_last_relay_json));
   s_char_relay->setCallbacks(new RelayCallbacks());
+
+  // Write-only "zero the energy register" command (auth + confirmation gated).
+  s_char_pzem_reset = svc->createCharacteristic(
+      BLE_UUID_PZEM_RESET, NIMBLE_PROPERTY::WRITE);
+  s_char_pzem_reset->setCallbacks(new PzemResetCallbacks());
 
   svc->start();
 
