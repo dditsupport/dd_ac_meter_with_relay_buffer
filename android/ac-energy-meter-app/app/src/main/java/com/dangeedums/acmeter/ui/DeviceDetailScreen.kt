@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +56,28 @@ fun DeviceDetailScreen(
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     var showClaim by remember { mutableStateOf(false) }
+    var showResetConfirm by remember { mutableStateOf(false) }
+
+    if (showResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirm = false },
+            title = { Text("Reset energy meter?") },
+            text = {
+                Text("This zeroes the meter's cumulative energy (kWh) register on " +
+                     "the device. It can't be undone. Use it only on a fresh install.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showResetConfirm = false; vm.resetEnergy() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Reset to 0") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
 
     if (showClaim && ui.info != null) {
         ClaimDeviceDialog(
@@ -120,6 +143,7 @@ fun DeviceDetailScreen(
                 onConfigureServer = onConfigureServer,
                 onRefresh         = { vm.refreshInfo() },
                 onClaim           = { showClaim = true },
+                onResetEnergy     = { showResetConfirm = true },
                 syncing           = ui.syncStage != SyncStage.Idle
                                      && ui.syncStage != SyncStage.Done
                                      && ui.syncStage != SyncStage.Failed,
@@ -276,6 +300,7 @@ private fun ActionsCard(
     onConfigureServer: () -> Unit,
     onRefresh: () -> Unit,
     onClaim: () -> Unit,
+    onResetEnergy: () -> Unit,
     syncing: Boolean,
 ) {
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
@@ -307,6 +332,14 @@ private fun ActionsCard(
                 Icon(Icons.Default.CloudUpload, contentDescription = null)
                 Spacer(Modifier.size(8.dp))
                 Text("Register with cloud")
+            }
+            OutlinedButton(
+                onClick = onResetEnergy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text("Reset energy meter to 0")
             }
         }
     }

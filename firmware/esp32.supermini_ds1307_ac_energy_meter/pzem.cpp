@@ -107,4 +107,12 @@ bool reset_energy() {
   return s_pzem->resetEnergy();
 }
 
+static volatile bool s_reset_requested = false;
+void request_reset() { s_reset_requested = true; }
+bool consume_reset_request() {
+  if (!s_reset_requested) return false;
+  s_reset_requested = false;
+  return true;
+}
+
 }  // namespace pzem

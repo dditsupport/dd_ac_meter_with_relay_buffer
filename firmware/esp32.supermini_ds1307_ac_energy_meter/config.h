@@ -204,6 +204,9 @@
 #define BLE_UUID_WIFI_SCAN      "d4346c1c-6e36-4a0f-a164-84cd396a4697"
 #define BLE_UUID_SERVER_CONFIG  "9478f8ff-cb2f-4447-8a2f-49791de6bc09"
 #define BLE_UUID_RELAY          "8c5a2e91-6f3d-4b27-9a1c-0e7d3f8b6a52"
+// Write-only command to zero the PZEM cumulative energy register (fresh
+// install). Requires BLE auth and an explicit confirmation payload.
+#define BLE_UUID_PZEM_RESET     "b7e6a1d4-3c2f-4e88-9a5b-6d0f21c8e743"
 
 // ---------- BLE access auth (HMAC-SHA256 challenge/response) ----------
 // The app must prove it knows BLE_PSK before any other characteristic is

@@ -25,6 +25,7 @@ private val WIFI_STATUS_CHAR    = characteristicOf(SERVICE, BleUuids.WIFI_STATUS
 private val WIFI_SCAN_CHAR      = characteristicOf(SERVICE, BleUuids.WIFI_SCAN.toString())
 private val SERVER_CONFIG_CHAR  = characteristicOf(SERVICE, BleUuids.SERVER_CONFIG.toString())
 private val RELAY_CHAR          = characteristicOf(SERVICE, BleUuids.RELAY.toString())
+private val PZEM_RESET_CHAR     = characteristicOf(SERVICE, BleUuids.PZEM_RESET.toString())
 
 /**
  * Higher-level operations on a AC Energy Meter peripheral. One instance per
@@ -127,6 +128,13 @@ class MeterGatt(
     /** Manual relay control. mode = "on" | "off" | "auto" (follow schedule). */
     suspend fun writeRelayMode(mode: String) {
         peripheral.write(RELAY_CHAR, """{"mode":"$mode"}""".toByteArray(), WriteType.WithResponse)
+    }
+
+    /** Zero the PZEM cumulative energy register. The firmware requires this exact
+     *  confirmation payload and an authenticated connection. */
+    suspend fun resetEnergy() {
+        peripheral.write(PZEM_RESET_CHAR, """{"action":"reset_energy"}""".toByteArray(),
+            WriteType.WithResponse)
     }
 
     /** Live Wi-Fi status pushes from the device. */

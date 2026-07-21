@@ -281,13 +281,18 @@ static void sampling_task(void *) {
   for (;;) {
     esp_task_wdt_reset();
 
-    // Fresh-install energy reset requested via the BOOT long-press (loop()).
-    // Done here so the resetEnergy() Modbus write never races pzem::read().
-    if (g_energy_reset_req) {
-      g_energy_reset_req = false;
+    // Fresh-install energy reset — from the BOOT long-press (loop()) or the
+    // BLE "reset energy" command (Android app). Done here, on the PZEM-owning
+    // task, so the resetEnergy() Modbus write never races pzem::read(). Read
+    // both sources unconditionally so a request on either isn't left pending.
+    bool reset_from_button = g_energy_reset_req;
+    g_energy_reset_req = false;
+    bool reset_from_ble = pzem::consume_reset_request();
+    if (reset_from_button || reset_from_ble) {
       if (pzem::reset_energy()) {
         session_anchor_wh = -1.0f;   // re-anchor session; today re-anchors on the drop
-        LOG_PRINTLN("[reset] PZEM energy register zeroed (fresh install)");
+        LOG_PRINTF("[reset] PZEM energy register zeroed (%s)\n",
+                      reset_from_ble ? "BLE app" : "BOOT button");
       } else {
         LOG_PRINTLN("[reset] pzem::reset_energy() failed");
       }
