@@ -19,4 +19,13 @@ bool is_streaming();
 // reboots the chip if this stays false for too long.
 bool is_alive();
 
+// Temporarily stop / restart BLE advertising so the Wi-Fi side can own the
+// single ESP32-C3 radio during a connect + TLS sync (avoids a coexistence
+// crash under radio load). pause_advertising() only stops advertising; an
+// already-connected client link is left untouched, and resume_advertising() is
+// a no-op while a client is connected (NimBLE re-advertises on disconnect).
+// Both are safe no-ops before begin().
+void pause_advertising();
+void resume_advertising();
+
 }  // namespace ble_service

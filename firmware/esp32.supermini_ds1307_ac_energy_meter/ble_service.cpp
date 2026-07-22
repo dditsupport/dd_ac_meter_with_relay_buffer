@@ -680,4 +680,19 @@ bool is_alive() {
   return adv != nullptr && adv->isAdvertising();
 }
 
+void pause_advertising() {
+  if (s_server == nullptr) return;   // begin() not run yet
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv != nullptr && adv->isAdvertising()) adv->stop();
+}
+
+void resume_advertising() {
+  if (s_server == nullptr) return;
+  // A connected client already keeps BLE alive, and advertising auto-restarts
+  // on that client's disconnect, so don't force it here.
+  if (s_client_connected) return;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv != nullptr && !adv->isAdvertising()) adv->start();
+}
+
 }  // namespace ble_service

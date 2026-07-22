@@ -56,11 +56,22 @@
 // Wi-Fi TX power cap. The Super Mini's onboard LDO (~250 mA) can't sustain the
 // radio's ~335 mA peak at full power (19.5 dBm); the 3V3 rail sags during a TX
 // burst and corrupts the 802.11 auth frames, so association fails with
-// disconnect reason 2 (AUTH_EXPIRE). 15 dBm keeps the peak (~240 mA) under the
-// LDO limit. Applied via WiFi.setTxPower() after EVERY WiFi.begin() (the driver
-// resets it on reconnect). If you add a stiff 3V3 supply (external LDO + local
-// 220 µF + 100 nF at the 3V3 pin), you can raise this toward WIFI_POWER_19_5dBm.
-#define WIFI_TX_POWER           WIFI_POWER_15dBm
+// disconnect reason 2 (AUTH_EXPIRE). Field testing (incl. an external 1 A
+// regulator) showed 15 dBm still fails while BLE runs concurrently but 11 dBm
+// is stable, so 11 dBm is the default. Applied via WiFi.setTxPower() after
+// EVERY WiFi.begin() (the driver resets it on reconnect). Raise it only with a
+// stiff 3V3 supply AND if BLE is quieted during sync (see below).
+#define WIFI_TX_POWER           WIFI_POWER_11dBm
+
+// Pause BLE advertising for the duration of each Wi-Fi cycle (connect + NTP +
+// TLS POST). On the single-core ESP32-C3, BLE advertising sharing the radio
+// with a Wi-Fi TLS upload trips a coexistence crash (the panic always faults at
+// the same PC). Pausing advertising lets Wi-Fi own the radio for the upload,
+// then advertising resumes. It's a no-op while a phone is actively connected
+// over BLE (NimBLE has already stopped advertising then), so live config isn't
+// disrupted — it only quiets the autonomous case. Set to 0 to keep BLE fully
+// concurrent (safe on a stiff supply, or the dual-core WROOM).
+#define WIFI_PAUSE_BLE_DURING_SYNC 1
 
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
