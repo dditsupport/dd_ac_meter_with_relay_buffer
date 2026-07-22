@@ -455,10 +455,21 @@ static void connectivity_task(void *) {
       bool wifi_allowed;
 #if BLE_CONFIG_WINDOW_SEC > 0
       if (!ble_off && uptime_sec >= (uint64_t)BLE_CONFIG_WINDOW_SEC) {
-        LOG_PRINTLN("[conn] BLE config window over — shutting BLE down, Wi-Fi takes the radio");
-        ble_service::shutdown();
-        ble_off = true;
-        first_cycle = true;   // connect immediately now that the radio is free
+        // Config window is over, but if the app is still connected, don't cut it
+        // off mid-session — hold BLE (and keep Wi-Fi off the radio) until the app
+        // disconnects, then hand the radio to Wi-Fi. Log the deferral once.
+        if (ble_service::is_connected()) {
+          static bool logged_defer = false;
+          if (!logged_defer) {
+            LOG_PRINTLN("[conn] BLE config window over but app is connected — deferring handoff until it disconnects");
+            logged_defer = true;
+          }
+        } else {
+          LOG_PRINTLN("[conn] BLE config window over — shutting BLE down, Wi-Fi takes the radio");
+          ble_service::shutdown();
+          ble_off = true;
+          first_cycle = true;   // connect immediately now that the radio is free
+        }
       }
       wifi_allowed = ble_off;   // Wi-Fi only after BLE has handed off the radio
 #else

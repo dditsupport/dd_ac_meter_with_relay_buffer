@@ -676,6 +676,8 @@ void tick() {
 
 bool is_streaming() { return s_streaming_active; }
 
+bool is_connected() { return !s_shutdown && s_client_connected; }
+
 bool is_alive() {
   if (s_shutdown) return true;   // intentionally off at the handoff — not wedged
   if (s_client_connected) return true;

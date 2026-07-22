@@ -14,6 +14,12 @@ void tick();
 // True if the radio is currently streaming notifications (informational).
 bool is_streaming();
 
+// True while a client (the app) is currently connected over BLE. Used to defer
+// the BLE->Wi-Fi handoff shutdown so an in-progress app session isn't cut off;
+// the handoff waits for the app to disconnect. Safe no-op (false) after
+// shutdown().
+bool is_connected();
+
 // True if BLE is in a healthy state: either advertising or a client is
 // currently connected. The stuck-BLE watchdog in the connectivity task
 // reboots the chip if this stays false for too long.
