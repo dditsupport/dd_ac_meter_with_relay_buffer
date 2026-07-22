@@ -7,6 +7,7 @@
 #include "rtc.h"
 #include "led.h"
 #include "relay.h"
+#include "ble_service.h"   // pause/resume advertising around the sync (coex)
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -520,55 +521,70 @@ void run_scan() {
 }
 
 bool run_cycle() {
-  if (!try_connect_known()) {
+  // Quiet BLE for the whole cycle so the Wi-Fi connect + TLS POST owns the
+  // single C3 radio. On this chip, BLE advertising racing a TLS upload trips a
+  // coexistence crash under marginal signal. No-op when a phone is connected
+  // over BLE (advertising is already stopped), so live config is unaffected.
+#if WIFI_PAUSE_BLE_DURING_SYNC
+  ble_service::pause_advertising();
+  delay(20);   // let the BLE controller settle off-air before we hit the radio
+#endif
+
+  bool result = false;
+  if (try_connect_known()) {
+    ntp_sync_if_due();  // hourly resync; OK to proceed even if it fails
+
+    uint64_t snapshot = storage::snapshot_max_seq();
+    // Loop until all rows up to snapshot have been acked or a POST fails.
+    while (true) {
+      uint64_t acked = 0;
+      if (!post_batch(snapshot, acked)) break;
+      if (acked > 0) {
+        storage::truncate_up_to(acked);
+        // Prune boot_history: any entry older than the oldest remaining row's
+        // boot_id is no longer needed (server has it, device won't re-send).
+        // If /log.csv is now empty, prune everything older than the current
+        // boot so boot_history collapses to just {current_boot}.
+        uint32_t min_keep = storage::boot_id();
+        storage::stream_rows_up_to(UINT64_MAX, [&](const storage::RowFields &r) -> bool {
+          if (r.boot_id < min_keep) min_keep = r.boot_id;
+          return true;
+        });
+        storage::prune_boot_history_below(min_keep);
+
+        if (state_lock()) {
+          g_state.unsynced_count = storage::current_unsynced_count();
+          state_unlock();
+        }
+      }
+      // If nothing left to send for this snapshot, exit.
+      if (storage::current_unsynced_count() == 0) break;
+      // If we still have rows with seq <= snapshot (multi-batch case), continue.
+      bool more = false;
+      storage::stream_rows_up_to(snapshot, [&](const storage::RowFields &) {
+        more = true;
+        return false;
+      });
+      if (!more) break;
+    }
+
+    storage::set_last_sync_at((uint32_t)time(nullptr));
+    // Stay connected between cycles — do NOT disconnect here. The next cycle's
+    // try_connect_known() early-returns on WL_CONNECTED, so we skip the
+    // reconnect (no log spam, no IDF re-association noise) and the device
+    // stays reachable / shows "Connected" in the app.
+    set_wifi_status(WIFI_CONNECTED);
+    result = true;
+  } else {
     WiFi.disconnect(true, true);
     set_wifi_status(WIFI_IDLE);
-    return false;
+    result = false;
   }
 
-  ntp_sync_if_due();  // hourly resync; OK to proceed even if it fails
-
-  uint64_t snapshot = storage::snapshot_max_seq();
-  // Loop until all rows up to snapshot have been acked or a POST fails.
-  while (true) {
-    uint64_t acked = 0;
-    if (!post_batch(snapshot, acked)) break;
-    if (acked > 0) {
-      storage::truncate_up_to(acked);
-      // Prune boot_history: any entry older than the oldest remaining row's
-      // boot_id is no longer needed (server has it, device won't re-send).
-      // If /log.csv is now empty, prune everything older than the current
-      // boot so boot_history collapses to just {current_boot}.
-      uint32_t min_keep = storage::boot_id();
-      storage::stream_rows_up_to(UINT64_MAX, [&](const storage::RowFields &r) -> bool {
-        if (r.boot_id < min_keep) min_keep = r.boot_id;
-        return true;
-      });
-      storage::prune_boot_history_below(min_keep);
-
-      if (state_lock()) {
-        g_state.unsynced_count = storage::current_unsynced_count();
-        state_unlock();
-      }
-    }
-    // If nothing left to send for this snapshot, exit.
-    if (storage::current_unsynced_count() == 0) break;
-    // If we still have rows with seq <= snapshot (multi-batch case), continue.
-    bool more = false;
-    storage::stream_rows_up_to(snapshot, [&](const storage::RowFields &) {
-      more = true;
-      return false;
-    });
-    if (!more) break;
-  }
-
-  storage::set_last_sync_at((uint32_t)time(nullptr));
-  // Stay connected between cycles — do NOT disconnect here. The next cycle's
-  // try_connect_known() early-returns on WL_CONNECTED, so we skip the
-  // reconnect (no log spam, no IDF re-association noise) and the device
-  // stays reachable / shows "Connected" in the app.
-  set_wifi_status(WIFI_CONNECTED);
-  return true;
+#if WIFI_PAUSE_BLE_DURING_SYNC
+  ble_service::resume_advertising();
+#endif
+  return result;
 }
 
 }  // namespace wifi_sync
