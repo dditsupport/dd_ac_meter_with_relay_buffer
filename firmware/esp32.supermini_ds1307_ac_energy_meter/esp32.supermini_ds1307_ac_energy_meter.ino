@@ -431,36 +431,57 @@ static void sampling_task(void *) {
 // ---- ConnectivityTask ------------------------------------------------------
 static void connectivity_task(void *) {
   esp_task_wdt_add(nullptr);
-  uint64_t last_wifi_us     = time_source::monotonic_us();
+  uint64_t last_wifi_us      = time_source::monotonic_us();
   uint64_t last_ble_alive_us = time_source::monotonic_us();
-  // Run a Wi-Fi cycle quickly on first boot too — wait one interval to let
-  // the rest of the system settle.
   bool first_cycle = true;
+  // On the single-core C3, Wi-Fi (esp. the TLS sync) crashes while the BLE
+  // controller is co-active. So run BLE ONLY for the first BLE_CONFIG_WINDOW_SEC
+  // — the provisioning window, Wi-Fi held off — then shut BLE down and give
+  // Wi-Fi the radio. `ble_off` latches true once that handoff happens. With
+  // BLE_CONFIG_WINDOW_SEC == 0 the handoff is disabled and both run concurrently.
+  bool ble_off = false;
 
   for (;;) {
     esp_task_wdt_reset();
-    ble_service::tick();
-    if (ble_service::is_alive()) {
-      last_ble_alive_us = time_source::monotonic_us();
+    uint64_t now_us = time_source::monotonic_us();
+    uint64_t uptime_sec = now_us / 1000000ULL;
+
+    if (!ble_off) {
+      ble_service::tick();
+      if (ble_service::is_alive()) last_ble_alive_us = now_us;
     }
 
     if (!health::boot_loop_tripped()) {
-      // On-demand scan requested via BLE Wi-Fi Config write of {"action":"scan"}.
-      if (wifi_sync::consume_scan_request()) {
+      bool wifi_allowed;
+#if BLE_CONFIG_WINDOW_SEC > 0
+      if (!ble_off && uptime_sec >= (uint64_t)BLE_CONFIG_WINDOW_SEC) {
+        LOG_PRINTLN("[conn] BLE config window over — shutting BLE down, Wi-Fi takes the radio");
+        ble_service::shutdown();
+        ble_off = true;
+        first_cycle = true;   // connect immediately now that the radio is free
+      }
+      wifi_allowed = ble_off;   // Wi-Fi only after BLE has handed off the radio
+#else
+      wifi_allowed = true;      // handoff disabled: BLE + Wi-Fi run concurrently
+#endif
+
+      // On-demand Wi-Fi scan requested over BLE (provisioning), only while BLE
+      // is still up during the config window.
+      if (!ble_off && wifi_sync::consume_scan_request()) {
         wifi_sync::run_scan();
         ble_service::tick();  // push the fresh results immediately
       }
 
-      uint64_t now_us = time_source::monotonic_us();
-      uint64_t since_us = now_us - last_wifi_us;
-      uint64_t interval_us = (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
-      bool periodic_due = first_cycle ? (since_us > 30ULL * 1000000ULL)
-                                       : (since_us >= interval_us);
-      bool triggered = wifi_sync::consume_immediate_sync_request();
-      if (periodic_due || triggered) {
-        first_cycle = false;
-        last_wifi_us = now_us;
-        wifi_sync::run_cycle();
+      if (wifi_allowed) {
+        uint64_t since_us = now_us - last_wifi_us;
+        uint64_t interval_us = (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
+        bool periodic_due = first_cycle ? true : (since_us >= interval_us);
+        bool triggered = wifi_sync::consume_immediate_sync_request();
+        if (periodic_due || triggered) {
+          first_cycle = false;
+          last_wifi_us = now_us;
+          wifi_sync::run_cycle();
+        }
       }
     }
 
@@ -468,9 +489,6 @@ static void connectivity_task(void *) {
     // Independent of the 30 s task WDT — these catch the subtler case where
     // every task is alive but the radio side is silently dead. Guarded by
     // uptime so we never reboot in the first STUCK_*_REBOOT_SEC after boot.
-    uint64_t uptime_sec =
-        time_source::monotonic_us() / 1000000ULL;
-
     if (uptime_sec > STUCK_WIFI_REBOOT_SEC) {
       uint32_t since_post = wifi_sync::seconds_since_last_successful_post();
       // UINT32_MAX = never posted -> don't reboot a brand-new / unprovisioned
@@ -483,12 +501,16 @@ static void connectivity_task(void *) {
       }
     }
 
-    uint64_t since_ble_us = time_source::monotonic_us() - last_ble_alive_us;
-    if (since_ble_us / 1000000ULL > STUCK_BLE_REBOOT_SEC) {
-      LOG_PRINTF("[health] stuck-ble watchdog: %llu s since BLE was alive, restarting\n",
-                 (unsigned long long)(since_ble_us / 1000000ULL));
-      delay(100);
-      esp_restart();
+    // Stuck-BLE watchdog only applies while BLE is meant to be alive. After the
+    // intentional handoff shutdown, BLE is off by design — don't reboot on it.
+    if (!ble_off) {
+      uint64_t since_ble_us = time_source::monotonic_us() - last_ble_alive_us;
+      if (since_ble_us / 1000000ULL > STUCK_BLE_REBOOT_SEC) {
+        LOG_PRINTF("[health] stuck-ble watchdog: %llu s since BLE was alive, restarting\n",
+                   (unsigned long long)(since_ble_us / 1000000ULL));
+        delay(100);
+        esp_restart();
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));

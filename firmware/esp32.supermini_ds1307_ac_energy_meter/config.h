@@ -73,6 +73,16 @@
 // concurrent (safe on a stiff supply, or the dual-core WROOM).
 #define WIFI_PAUSE_BLE_DURING_SYNC 1
 
+// BLE→Wi-Fi radio handoff. On the single-core ESP32-C3 the Wi-Fi TLS sync
+// crashes while the BLE controller is co-active (pausing advertising isn't
+// enough — the controller itself must be off). So run BLE ONLY for the first
+// BLE_CONFIG_WINDOW_SEC after boot — the provisioning/config window, with Wi-Fi
+// held off — then shut BLE down completely and let Wi-Fi own the radio for the
+// rest of the run. Reboot the device to get another BLE config window. Set to 0
+// to disable the handoff and keep BLE + Wi-Fi concurrent (fine on the dual-core
+// WROOM or with a stiff supply).
+#define BLE_CONFIG_WINDOW_SEC   120
+
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
 // Also fires once on first Wi-Fi cycle after boot, so a fresh device picks

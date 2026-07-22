@@ -28,4 +28,10 @@ bool is_alive();
 void pause_advertising();
 void resume_advertising();
 
+// Fully de-initialize the BLE stack (controller + host), freeing the radio for
+// Wi-Fi. Used at the BLE→Wi-Fi handoff on the single-core C3, where Wi-Fi is
+// unstable while the BLE controller is co-active. Irreversible until reboot;
+// tick()/is_alive() become safe no-ops afterward.
+void shutdown();
+
 }  // namespace ble_service
