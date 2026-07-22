@@ -77,6 +77,7 @@ static WifiStatus s_last_pushed_wifi_status = WIFI_IDLE;
 
 static volatile bool s_client_connected = false;
 static volatile bool s_streaming_active = false;
+static volatile bool s_shutdown = false;   // true once shutdown() deinit'd BLE
 static volatile bool s_stream_requested = false;
 static uint16_t s_mtu = 23;  // default until negotiated
 
@@ -605,6 +606,7 @@ void begin() {
 }
 
 void tick() {
+  if (s_shutdown) return;   // BLE de-initialized at the Wi-Fi handoff
   // Refresh dynamic READ values.
   if (s_char_info) s_char_info->setValue(to_std(build_device_info_json()));
   if (s_char_boots) s_char_boots->setValue(to_std(build_boot_history_json()));
@@ -675,9 +677,21 @@ void tick() {
 bool is_streaming() { return s_streaming_active; }
 
 bool is_alive() {
+  if (s_shutdown) return true;   // intentionally off at the handoff — not wedged
   if (s_client_connected) return true;
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   return adv != nullptr && adv->isAdvertising();
+}
+
+void shutdown() {
+  if (s_shutdown) return;
+  s_shutdown = true;
+  s_server = nullptr;   // freed by deinit; null it so pause/resume no-op
+  // deinit(true) stops advertising/connections, tears down the host + BT
+  // controller, and frees the radio for Wi-Fi.
+  NimBLEDevice::deinit(true);
+  set_ble_status(BLE_OFF);
+  LOG_PRINTLN("[ble] de-initialized (Wi-Fi has the radio now)");
 }
 
 void pause_advertising() {
