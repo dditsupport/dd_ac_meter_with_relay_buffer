@@ -237,6 +237,10 @@
 
 // ---------- Task config ----------
 #define SAMPLING_TASK_STACK     6144
-#define CONN_TASK_STACK         12288
+// Must hold post_batch()'s 16 KB StaticJsonDocument AND the mbedTLS handshake
+// on top of it. 12 KB overflowed (the 16 KB doc alone exceeds it), silently
+// corrupting adjacent RAM — it only faulted on a marginal link where the TLS
+// handshake stacks deeper. 32 KB gives the doc + TLS + call frames real room.
+#define CONN_TASK_STACK         32768
 #define SAMPLING_TASK_PRIO      3
 #define CONN_TASK_PRIO          2
