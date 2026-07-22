@@ -247,10 +247,27 @@
 
 // ---------- Task config ----------
 #define SAMPLING_TASK_STACK     6144
-// Must hold post_batch()'s 16 KB StaticJsonDocument AND the mbedTLS handshake
-// on top of it. 12 KB overflowed (the 16 KB doc alone exceeds it), silently
-// corrupting adjacent RAM — it only faulted on a marginal link where the TLS
-// handshake stacks deeper. 32 KB gives the doc + TLS + call frames real room.
+// post_batch()'s 16 KB StaticJsonDocument now lives in .bss (file-scope static),
+// not on this stack, so the task only has to hold the mbedTLS handshake + call
+// frames. 32 KB stays comfortably above that with margin.
 #define CONN_TASK_STACK         32768
 #define SAMPLING_TASK_PRIO      3
 #define CONN_TASK_PRIO          2
+
+// ---------- Heap guard (TLS POST) ----------
+// A TLS handshake needs a large contiguous allocation for mbedTLS's buffers. On
+// a marginal link the handshake retries and churns the heap; if free memory (or
+// the largest free block) has dropped too low, opening the connection can fail
+// hard or corrupt the heap. So post_batch() checks these thresholds first and
+// defers the POST (rows stay buffered, retried next cycle) when memory is tight,
+// degrading gracefully instead of panicking. Tune from the logged values.
+#define WIFI_MIN_FREE_HEAP_BYTES    45000
+#define WIFI_MIN_LARGEST_BLOCK_BYTES 40000
+
+// ---------- ROM / panic log visibility ----------
+// log_serial::init() can silence ets_printf / ROM putchar output to keep the
+// console clean of the Wi-Fi PHY's high-bit garbage. But that same path carries
+// the panic reason line ("CORRUPT HEAP: ...", "assert failed ...", "Guru
+// Meditation ..."), so silencing it hides *why* a crash happened. Set to 0 while
+// diagnosing crashes to see the reason; set to 1 for a quiet production console.
+#define ROM_LOG_QUIET           0

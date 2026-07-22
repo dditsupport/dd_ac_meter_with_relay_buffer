@@ -13,6 +13,8 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 #include "log_serial.h"
 
 // TODO: HMAC payload signing as a future hardening step. For v1, the only auth
@@ -252,9 +254,18 @@ static uint32_t read_coincell_mv() {
   return (uint32_t)(mv + 0.5f);
 }
 
+// The 16 KB POST request buffer lives here in .bss, NOT on the connectivity
+// task stack. The on-stack copy was the documented stack-overflow culprit (see
+// config.h CONN_TASK_STACK): the 16 KB doc plus the mbedTLS handshake stacking
+// on top of it overflowed and silently corrupted adjacent RAM, faulting only on
+// a marginal link where the handshake stacks deepest. Only the connectivity
+// task calls post_batch(), so this single-owner static needs no locking.
+static StaticJsonDocument<16384> s_post_doc;
+
 static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // Collect up to SYNC_BATCH_SIZE rows with seq <= snapshot_seq.
-  StaticJsonDocument<16384> doc;
+  StaticJsonDocument<16384> &doc = s_post_doc;
+  doc.clear();
   doc["device_id"] = identity::device_id();
   doc["fw_version"] = identity::fw_version();
   doc["sync_wall_time"] = time_source::iso8601_now();
@@ -329,6 +340,32 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTLN("[wifi] heartbeat POST (empty readings) to refresh config");
   }
 
+  // Compose URL: NVS-configured host (BLE-settable) or the compiled default,
+  // then the hardcoded path. Strip any trailing slash from the host so we
+  // don't double up.
+  String host = storage::ingest_host();
+  if (host.isEmpty()) host = INGEST_HOST_DEFAULT;
+  while (host.endsWith("/")) host.remove(host.length() - 1);
+  String url = host + INGEST_PATH;
+  bool is_https = url.startsWith("https://");
+
+  // Heap guard: a TLS handshake needs a large contiguous allocation for
+  // mbedTLS's buffers. If free heap — or, just as important, the largest free
+  // block — has dropped too low (e.g. after churn on a marginal link), skip
+  // this POST instead of risking an OOM-time hard fault or heap corruption. The
+  // rows stay buffered and ship next cycle once memory recovers. The numbers
+  // are logged so the thresholds can be tuned to what this board actually runs.
+  if (is_https) {
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t largest   = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (free_heap < WIFI_MIN_FREE_HEAP_BYTES ||
+        largest   < WIFI_MIN_LARGEST_BLOCK_BYTES) {
+      LOG_PRINTF("[wifi] low heap — deferring POST (free=%u largest=%u)\n",
+                    (unsigned)free_heap, (unsigned)largest);
+      return false;
+    }
+  }
+
   String body;
   serializeJson(doc, body);
 
@@ -337,16 +374,8 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
 
-  // Compose URL: NVS-configured host (BLE-settable) or the compiled default,
-  // then the hardcoded path. Strip any trailing slash from the host so we
-  // don't double up.
-  String host = storage::ingest_host();
-  if (host.isEmpty()) host = INGEST_HOST_DEFAULT;
-  while (host.endsWith("/")) host.remove(host.length() - 1);
-  String url = host + INGEST_PATH;
-
   bool ok;
-  if (url.startsWith("https://")) {
+  if (is_https) {
     ok = http.begin(client, url);
   } else {
     ok = http.begin(url);  // plain HTTP for bench stub
@@ -365,6 +394,12 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   String resp = http.getString();
   http.end();
   s_radio_busy = false;
+
+  // Periodic heap visibility: one line per POST so a slow leak or fragmentation
+  // trend is obvious in the log well before it reaches the guard threshold.
+  LOG_PRINTF("[wifi] heap free=%u largest=%u\n",
+                (unsigned)esp_get_free_heap_size(),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
   if (code != 200) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
