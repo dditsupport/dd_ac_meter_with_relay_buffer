@@ -15,6 +15,7 @@
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 #include "log_serial.h"
 
 // TODO: HMAC payload signing as a future hardening step. For v1, the only auth
@@ -145,6 +146,7 @@ static bool try_connect_known() {
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED &&
            millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+      esp_task_wdt_reset();  // this 15 s wait alone can approach the task WDT
       delay(200);
     }
     if (WiFi.status() == WL_CONNECTED) {
@@ -200,6 +202,7 @@ static bool ntp_sync_if_due() {
   configTzTime(TZ_INFO, NTP_SERVER_1, NTP_SERVER_2);
   uint32_t start = millis();
   while (millis() - start < NTP_SYNC_TIMEOUT_MS) {
+    esp_task_wdt_reset();
     time_t now = time(nullptr);
     if (now > 1700000000) {
       time_source::set_wall_clock(now);
@@ -371,8 +374,17 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
 
   WiFiClientSecure client;
   client.setInsecure();  // TODO: cert pinning
+  // Cap the TLS handshake so a stall on a marginal link can't block this task
+  // past the task watchdog (the cause of the recurring `task_wdt: conn` reboot).
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);  // bound TCP connect too
+  http.setTimeout(HTTP_TIMEOUT_MS);         // bound the response read
+
+  // Feed the task WDT right before the blocking POST: even a bounded handshake
+  // + connect + read can sum to several seconds, and this is the longest single
+  // blocking span in the connectivity task's loop.
+  esp_task_wdt_reset();
 
   bool ok;
   if (is_https) {
@@ -572,6 +584,7 @@ bool run_cycle() {
     uint64_t snapshot = storage::snapshot_max_seq();
     // Loop until all rows up to snapshot have been acked or a POST fails.
     while (true) {
+      esp_task_wdt_reset();  // multi-batch drains can span several POSTs
       uint64_t acked = 0;
       if (!post_batch(snapshot, acked)) break;
       if (acked > 0) {

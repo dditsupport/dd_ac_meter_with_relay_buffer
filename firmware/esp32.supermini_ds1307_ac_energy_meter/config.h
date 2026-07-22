@@ -52,6 +52,12 @@
 #define NTP_RESYNC_INTERVAL_SEC 3600      // re-hit the NTP server at most every 1 h
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define HTTP_TIMEOUT_MS         10000
+// TLS handshake cap (seconds). WiFiClientSecure defaults to 120 s, so on a
+// marginal link a stalled handshake blocks the connectivity task far past the
+// ~30 s task watchdog, which then aborts and reboots the chip (seen as the
+// recurring `task_wdt: conn` panic). Capping it well under the WDT lets a bad
+// handshake fail fast so post_batch() just retries next cycle instead.
+#define TLS_HANDSHAKE_TIMEOUT_S 12
 
 // Wi-Fi TX power cap. The Super Mini's onboard LDO (~250 mA) can't sustain the
 // radio's ~335 mA peak at full power (19.5 dBm); the 3V3 rail sags during a TX
