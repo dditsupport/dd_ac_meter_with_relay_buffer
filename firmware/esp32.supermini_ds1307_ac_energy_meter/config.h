@@ -152,12 +152,14 @@
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 
 // ---------- Status LED ----------
-// Wi-Fi activity indicator. External LED (+ series resistor to GND) on GPIO7,
-// a plain non-strapping pin. Set ACTIVE_HIGH to 0 if your LED is wired
-// active-low. (The Super Mini's on-board GPIO8 LED is left free — GPIO8 is a
+// Wi-Fi activity indicator. External LED on GPIO7, a plain non-strapping pin,
+// wired ACTIVE-LOW: the anode is tied to Vcc and the cathode returns through a
+// series resistor to GPIO7, so the LED lights when the pin is driven LOW. Hence
+// LED_ACTIVE_HIGH is 0. Set it to 1 for the other wiring (GPIO7 -> resistor ->
+// LED -> GND). (The Super Mini's on-board GPIO8 LED is left free — GPIO8 is a
 // strapping pin.)
 #define PIN_STATUS_LED          7
-#define LED_ACTIVE_HIGH         1
+#define LED_ACTIVE_HIGH         0
 #define LED_BLINK_SEARCH_MS     150       // toggle period while Wi-Fi disconnected
 #define LED_BLINK_TX_MS         60        // toggle period during a data POST
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
@@ -190,17 +192,19 @@
 // AC has power; to CUT the AC we ENERGIZE it (opening the NC contact). So
 // "energize" == "cut AC", and a dead controller leaves the AC powered.
 // Drive a contactor rated for the compressor's inrush (1.5-2 ton LRA), not a
-// bare PCB relay. The relay is driven through a PC817 optocoupler (inverted
-// input / active-low): the pin idles HIGH to keep the relay DE-ENERGIZED
-// (AC on) and is driven LOW to ENERGIZE the coil (cut AC), so RELAY_ACTIVE_HIGH
-// is 0. Set it to 1 for a board whose coil drives on a HIGH input.
+// bare PCB relay. The relay is driven through a PC817 optocoupler wired
+// NON-INVERTING / ACTIVE-HIGH: a HIGH on the pin turns the opto LED on and
+// ENERGIZES the coil (cutting AC); the pin idles LOW, leaving the coil
+// DE-ENERGIZED (AC on) — the fail-safe state, which also holds while the pin is
+// undriven at reset. Hence RELAY_ACTIVE_HIGH is 1. Set it to 0 for a board
+// whose coil energizes on a LOW input.
 //
 // The AC-allowed "open hours" schedule + the two knobs below are pushed by the
 // server per device (relay_schedule / relay_compressor_watts / relay_grace_min)
 // and cached in NVS so cutoff keeps working through a Wi-Fi outage. The values
 // here are only defaults until the server pushes real ones.
 #define PIN_RELAY               10        // GPIO10, non-strapping
-#define RELAY_ACTIVE_HIGH       0
+#define RELAY_ACTIVE_HIGH       1
 
 // Compressor "is-running" watt threshold: below it the compressor is off, so
 // cutting is safe. While wattage stays at/above it the cut is deferred (waiting
