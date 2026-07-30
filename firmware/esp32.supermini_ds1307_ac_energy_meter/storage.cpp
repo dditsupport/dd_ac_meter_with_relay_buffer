@@ -187,8 +187,17 @@ bool begin() {
   if (!s_log_mutex) return false;
 
   if (!LittleFS.begin(true)) {
-    LOG_PRINTLN("[storage] LittleFS mount failed");
-    return false;
+    // begin(true) is meant to format-on-fail, but that path can itself return
+    // false on a partition left inconsistent by a reset caught mid-write (it
+    // sometimes formats yet fails to remount in the same call). Force an
+    // explicit reformat + remount rather than bricking the device on a fatal —
+    // the buffered rows are expendable, a dead unit isn't.
+    LOG_PRINTLN("[storage] LittleFS mount failed — forcing reformat");
+    if (!LittleFS.format() || !LittleFS.begin(false)) {
+      LOG_PRINTLN("[storage] LittleFS reformat failed; check flash");
+      return false;
+    }
+    LOG_PRINTLN("[storage] LittleFS reformatted OK (buffered rows lost)");
   }
   s_partition_total = LittleFS.totalBytes();
 
@@ -550,6 +559,12 @@ bool consume_factory_reset_request() {
 }
 
 void factory_reset() {
+  // Take the log lock and intentionally never release it: the device reboots
+  // right after, and holding it guarantees no task appends to LittleFS while we
+  // format — a write caught mid-flight by the reboot is exactly what can leave
+  // the filesystem unmountable on the next boot.
+  lock_log();
+
   // Close our own NVS handles so the partition can be deinitialized, then erase
   // the WHOLE default NVS partition — every namespace (cfg, state, relay,
   // health) at once, which also future-proofs this against namespaces added
@@ -562,13 +577,11 @@ void factory_reset() {
   esp_err_t eerr = nvs_flash_erase();
   LOG_PRINTF("[storage] NVS wipe: deinit=%d erase=%d\n", (int)derr, (int)eerr);
 
-  // Drop all buffered readings and any temp file.
-  if (lock_log()) {
-    LittleFS.remove(LOG_PATH);
-    LittleFS.remove(LOG_TMP_PATH);
-    s_unsynced_count = 0;
-    unlock_log();
-  }
+  // Reformat LittleFS for a clean, consistent buffer — more robust than removing
+  // individual files, which could leave a partially written file across reboot.
+  bool fmt = LittleFS.format();
+  s_unsynced_count = 0;
+  LOG_PRINTF("[storage] LittleFS format: %d\n", (int)fmt);
   LOG_PRINTLN("[storage] FACTORY RESET complete — rebooting as a fresh device");
 }
 
