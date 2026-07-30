@@ -199,6 +199,16 @@ void loop() {
     boot_reset_fired    = false;
   }
 
+  // Factory reset requested over BLE (Android app). Done here in the main loop,
+  // outside the NimBLE callback, so the NVS erase + reboot run from a safe
+  // context. This wipes the device to a fresh state and restarts it.
+  if (storage::consume_factory_reset_request()) {
+    LOG_PRINTLN("[reset] factory reset requested — wiping NVS + log, rebooting");
+    storage::factory_reset();
+    delay(300);        // let the log line flush before the restart
+    esp_restart();
+  }
+
   led::tick();
   relay::tick();
   delay(50);

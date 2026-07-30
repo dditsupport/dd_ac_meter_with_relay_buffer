@@ -279,6 +279,27 @@ class DeviceDetailViewModel(
         }
     }
 
+    /** Factory-reset the device over BLE (destructive): the firmware wipes NVS
+     *  + buffered readings and reboots into a fresh, unprovisioned state. The
+     *  device disconnects as it reboots, so we only confirm the command was sent
+     *  and tell the user to re-provision. */
+    fun factoryReset() {
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(notice = null, error = null)
+            val sent = runCatching { gatt.factoryReset() }.isSuccess
+            _ui.value = if (sent) {
+                _ui.value.copy(
+                    notice = "Factory reset sent — the device is wiping its data and " +
+                        "restarting as a fresh device. It will disconnect now; re-scan " +
+                        "and set up Wi-Fi again to use it.",
+                    error = null,
+                )
+            } else {
+                _ui.value.copy(error = "Factory reset failed — couldn't reach the device")
+            }
+        }
+    }
+
     /** Suspending device-info read so callers can await it (e.g. after a sync). */
     private suspend fun readInfoNow() {
         runCatching { gatt.readDeviceInfo() }

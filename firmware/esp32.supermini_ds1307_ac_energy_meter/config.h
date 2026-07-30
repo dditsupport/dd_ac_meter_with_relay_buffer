@@ -239,6 +239,12 @@
 // install). Requires BLE auth and an explicit confirmation payload.
 #define BLE_UUID_PZEM_RESET     "b7e6a1d4-3c2f-4e88-9a5b-6d0f21c8e743"
 
+// Write-only command to factory-reset the device: wipe the entire NVS partition
+// (Wi-Fi creds, backend host, log interval, boot/seq counters, relay schedule,
+// boot-loop history) and clear the buffered readings, then reboot so it comes up
+// as a fresh, unprovisioned device. Requires BLE auth and a confirmation payload.
+#define BLE_UUID_FACTORY_RESET  "c1a9f2e5-4b6d-4c8a-9e21-7f3b0d5a8c64"
+
 // ---------- BLE access auth (HMAC-SHA256 challenge/response) ----------
 // The app must prove it knows BLE_PSK before any other characteristic is
 // usable, which keeps generic BLE tools (e.g. nRF Connect) out. The key is

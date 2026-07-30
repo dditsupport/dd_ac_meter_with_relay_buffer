@@ -119,6 +119,19 @@ bool is_buffer_full();
 // Update the in-memory unsynced count exposed to SharedState.
 uint32_t current_unsynced_count();
 
+// Factory reset ---------------------------------------------------------------
+// Wipe the ENTIRE NVS partition (every namespace: cfg, state, relay, health)
+// and drop all buffered readings, returning the device to a fresh, unprovisioned
+// state. Destructive and irreversible; the caller is expected to reboot right
+// after. Because it deinitializes NVS, do not touch any Preferences/NVS after
+// calling it — just reboot.
+void factory_reset();
+
+// Request/consume flag so a BLE write can ask the main loop to run the reset +
+// reboot from a safe context rather than inside the NimBLE callback.
+void request_factory_reset();
+bool consume_factory_reset_request();
+
 // Serial helpers --------------------------------------------------------------
 void dump_log_to_serial();      // for `DUMP` command
 void dump_boots_to_serial();    // for `BOOTS` command

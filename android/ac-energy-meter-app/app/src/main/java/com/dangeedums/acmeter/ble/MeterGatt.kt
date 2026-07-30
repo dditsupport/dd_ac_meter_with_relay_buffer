@@ -26,6 +26,7 @@ private val WIFI_SCAN_CHAR      = characteristicOf(SERVICE, BleUuids.WIFI_SCAN.t
 private val SERVER_CONFIG_CHAR  = characteristicOf(SERVICE, BleUuids.SERVER_CONFIG.toString())
 private val RELAY_CHAR          = characteristicOf(SERVICE, BleUuids.RELAY.toString())
 private val PZEM_RESET_CHAR     = characteristicOf(SERVICE, BleUuids.PZEM_RESET.toString())
+private val FACTORY_RESET_CHAR  = characteristicOf(SERVICE, BleUuids.FACTORY_RESET.toString())
 
 /**
  * Higher-level operations on a AC Energy Meter peripheral. One instance per
@@ -134,6 +135,16 @@ class MeterGatt(
      *  confirmation payload and an authenticated connection. */
     suspend fun resetEnergy() {
         peripheral.write(PZEM_RESET_CHAR, """{"action":"reset_energy"}""".toByteArray(),
+            WriteType.WithResponse)
+    }
+
+    /** Factory-reset the device: the firmware wipes NVS (Wi-Fi creds, backend
+     *  host, counters, relay schedule) plus the buffered readings and reboots
+     *  into a fresh, unprovisioned state. Requires this exact confirmation
+     *  payload and an authenticated connection. The device disconnects as it
+     *  reboots, so no response beyond the write ACK is expected. */
+    suspend fun factoryReset() {
+        peripheral.write(FACTORY_RESET_CHAR, """{"action":"factory_reset"}""".toByteArray(),
             WriteType.WithResponse)
     }
 

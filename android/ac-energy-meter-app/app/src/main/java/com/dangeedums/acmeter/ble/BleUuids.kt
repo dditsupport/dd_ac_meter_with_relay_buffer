@@ -27,4 +27,8 @@ object BleUuids {
 
     // Write-only: zero the PZEM cumulative energy register (auth + confirmation).
     val PZEM_RESET      : UUID = UUID.fromString("b7e6a1d4-3c2f-4e88-9a5b-6d0f21c8e743")
+
+    // Write-only: factory-reset the device — wipe NVS + buffered readings and
+    // reboot into a fresh, unprovisioned state (auth + confirmation).
+    val FACTORY_RESET   : UUID = UUID.fromString("c1a9f2e5-4b6d-4c8a-9e21-7f3b0d5a8c64")
 }

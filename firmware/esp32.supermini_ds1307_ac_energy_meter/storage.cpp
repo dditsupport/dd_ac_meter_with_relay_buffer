@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <nvs_flash.h>
 #include "log_serial.h"
 
 namespace storage {
@@ -20,6 +21,7 @@ static uint64_t s_seq_hwm = 0;
 static uint32_t s_unsynced_count = 0;
 static bool s_buffer_full = false;
 static uint32_t s_partition_total = 0;
+static volatile bool s_factory_reset_req = false;
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -535,6 +537,39 @@ void clear_log() {
   s_unsynced_count = 0;
   unlock_log();
   LOG_PRINTLN("[storage] log cleared");
+}
+
+// ---- Factory reset ----------------------------------------------------------
+
+void request_factory_reset() { s_factory_reset_req = true; }
+
+bool consume_factory_reset_request() {
+  if (!s_factory_reset_req) return false;
+  s_factory_reset_req = false;
+  return true;
+}
+
+void factory_reset() {
+  // Close our own NVS handles so the partition can be deinitialized, then erase
+  // the WHOLE default NVS partition — every namespace (cfg, state, relay,
+  // health) at once, which also future-proofs this against namespaces added
+  // later. After erase the device boots exactly as if freshly flashed:
+  // boot_id/seq reset, no Wi-Fi creds, default host + log interval, no relay
+  // schedule, cleared boot-loop history.
+  s_cfg.end();
+  s_state.end();
+  esp_err_t derr = nvs_flash_deinit();
+  esp_err_t eerr = nvs_flash_erase();
+  LOG_PRINTF("[storage] NVS wipe: deinit=%d erase=%d\n", (int)derr, (int)eerr);
+
+  // Drop all buffered readings and any temp file.
+  if (lock_log()) {
+    LittleFS.remove(LOG_PATH);
+    LittleFS.remove(LOG_TMP_PATH);
+    s_unsynced_count = 0;
+    unlock_log();
+  }
+  LOG_PRINTLN("[storage] FACTORY RESET complete — rebooting as a fresh device");
 }
 
 }  // namespace storage
