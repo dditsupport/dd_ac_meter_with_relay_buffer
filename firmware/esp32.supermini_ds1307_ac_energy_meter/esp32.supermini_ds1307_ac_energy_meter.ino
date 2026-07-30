@@ -48,7 +48,9 @@ void setup() {
 
   Serial.begin(115200);
   log_serial::init();
-  delay(50);
+  // Give the native USB-CDC console time to enumerate on the host before the
+  // first prints, otherwise the boot banner is lost on this bridge-less board.
+  delay(1000);
   LOG_PRINTLN();
   LOG_PRINTLN("=== AC Energy Meter boot ===");
 
