@@ -47,7 +47,12 @@ data class DevicesResponse(
 data class CloudDevice(
     val device_id: String,
     val friendly_name: String,
-    val location: String? = null,
+    /** Location foreign-key id as returned by the backend (e.g. 21). The
+     *  server sends this as a number; the human-readable name is in
+     *  [location_name]. Was previously typed String?, which crashed the whole
+     *  devices response with "Expected quotation mark, but had '2'". */
+    val location: Int? = null,
+    val location_name: String? = null,
     val capacity_kw: Double? = null,
     val owner_user_id: Int? = null,
     val owner_username: String? = null,
