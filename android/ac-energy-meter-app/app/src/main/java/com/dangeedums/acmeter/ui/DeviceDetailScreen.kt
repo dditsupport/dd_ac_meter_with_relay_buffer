@@ -57,6 +57,7 @@ fun DeviceDetailScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     var showClaim by remember { mutableStateOf(false) }
     var showResetConfirm by remember { mutableStateOf(false) }
+    var showFactoryResetConfirm by remember { mutableStateOf(false) }
 
     if (showResetConfirm) {
         AlertDialog(
@@ -75,6 +76,29 @@ fun DeviceDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showResetConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showFactoryResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showFactoryResetConfirm = false },
+            title = { Text("Factory reset device?") },
+            text = {
+                Text("This wipes ALL settings on the device — saved Wi-Fi, backend " +
+                     "host, relay schedule, and buffered readings — then reboots it as " +
+                     "a fresh, unconfigured device. It can't be undone, and you'll need " +
+                     "to set up Wi-Fi again afterwards.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showFactoryResetConfirm = false; vm.factoryReset() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Erase & restart") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFactoryResetConfirm = false }) { Text("Cancel") }
             },
         )
     }
@@ -149,6 +173,7 @@ fun DeviceDetailScreen(
                 onRefresh         = { vm.refreshInfo() },
                 onClaim           = { showClaim = true },
                 onResetEnergy     = { showResetConfirm = true },
+                onFactoryReset    = { showFactoryResetConfirm = true },
                 syncing           = ui.syncStage != SyncStage.Idle
                                      && ui.syncStage != SyncStage.Done
                                      && ui.syncStage != SyncStage.Failed,
@@ -307,6 +332,7 @@ private fun ActionsCard(
     onRefresh: () -> Unit,
     onClaim: () -> Unit,
     onResetEnergy: () -> Unit,
+    onFactoryReset: () -> Unit,
     syncing: Boolean,
 ) {
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
@@ -346,6 +372,14 @@ private fun ActionsCard(
                     contentColor = MaterialTheme.colorScheme.error),
             ) {
                 Text("Reset energy meter to 0")
+            }
+            OutlinedButton(
+                onClick = onFactoryReset,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text("Factory reset (wipe device)")
             }
         }
     }

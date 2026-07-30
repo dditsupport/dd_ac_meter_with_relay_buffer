@@ -69,6 +69,7 @@ static NimBLECharacteristic *s_char_wifi_scan = nullptr;
 static NimBLECharacteristic *s_char_server_cfg = nullptr;
 static NimBLECharacteristic *s_char_relay = nullptr;
 static NimBLECharacteristic *s_char_pzem_reset = nullptr;
+static NimBLECharacteristic *s_char_factory_reset = nullptr;
 static NimBLECharacteristic *s_char_auth_chal = nullptr;
 static NimBLECharacteristic *s_char_auth_resp = nullptr;
 static String s_last_relay_json = "";
@@ -364,6 +365,30 @@ class PzemResetCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+// Factory reset: wipe NVS + buffered readings and reboot into a fresh device.
+// Destructive, so it is gated on BLE auth AND an explicit confirmation payload:
+// {"action":"factory_reset"}. The actual wipe + reboot is deferred to the main
+// loop (storage::consume_factory_reset_request) so it never runs inside this
+// NimBLE callback.
+class FactoryResetCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    if (!is_authed(info)) return;
+    std::string v = c->getValue();
+    StaticJsonDocument<96> doc;
+    if (deserializeJson(doc, v)) {
+      LOG_PRINTF("[ble] factory-reset bad json: %s\n", v.c_str());
+      return;
+    }
+    String action = (const char *)(doc["action"] | "");
+    if (action != "factory_reset") {
+      LOG_PRINTF("[ble] factory-reset ignored (action=%s)\n", action.c_str());
+      return;
+    }
+    storage::request_factory_reset();
+    LOG_PRINTLN("[ble] factory reset requested by app — device will wipe and reboot");
+  }
+};
+
 class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
     if (!is_authed(info)) return;
@@ -592,6 +617,11 @@ void begin() {
   s_char_pzem_reset = svc->createCharacteristic(
       BLE_UUID_PZEM_RESET, NIMBLE_PROPERTY::WRITE);
   s_char_pzem_reset->setCallbacks(new PzemResetCallbacks());
+
+  // Write-only "factory reset" command (auth + confirmation gated).
+  s_char_factory_reset = svc->createCharacteristic(
+      BLE_UUID_FACTORY_RESET, NIMBLE_PROPERTY::WRITE);
+  s_char_factory_reset->setCallbacks(new FactoryResetCallbacks());
 
   svc->start();
 
