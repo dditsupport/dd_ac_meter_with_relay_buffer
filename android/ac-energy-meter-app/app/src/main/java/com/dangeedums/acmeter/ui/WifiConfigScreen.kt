@@ -1,6 +1,7 @@
 package com.dangeedums.acmeter.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,14 +19,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -57,7 +64,11 @@ fun WifiConfigScreen(vm: WifiConfigViewModel, onBack: () -> Unit) {
                  modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text("Device status: ${st.status}", fontWeight = FontWeight.Medium)
-                    st.ssid?.let   { Text("SSID: $it",   style = MaterialTheme.typography.bodySmall) }
+                    if (ui.savedSsid.isNotBlank()) {
+                        Text("Saved network: ${ui.savedSsid}",
+                             style = MaterialTheme.typography.bodySmall)
+                    }
+                    st.ssid?.let   { Text("Connected to: $it", style = MaterialTheme.typography.bodySmall) }
                     st.next?.let   { Text("Next: $it",   style = MaterialTheme.typography.bodySmall) }
                     st.detail?.let { Text("Detail: $it", style = MaterialTheme.typography.bodySmall,
                                           color = MaterialTheme.colorScheme.error) }
@@ -109,6 +120,30 @@ fun WifiConfigScreen(vm: WifiConfigViewModel, onBack: () -> Unit) {
                         else MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+
+        // ---- Wi-Fi transmit power ----
+        Spacer(Modifier.height(20.dp))
+        Text("Wi-Fi transmit power", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Lower power can be steadier on this board once the RTC/meter are wired. " +
+            "Current: " + (ui.txPowerDbm?.let { "%.1f dBm".format(it) } ?: "—"),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.height(4.dp))
+        var txMenuOpen by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(onClick = { txMenuOpen = true }) {
+                Text(ui.txPowerDbm?.let { "Set TX power (%.1f dBm)".format(it) } ?: "Set TX power")
+            }
+            DropdownMenu(expanded = txMenuOpen, onDismissRequest = { txMenuOpen = false }) {
+                listOf(8.5, 11.0, 13.0, 15.0, 17.0, 19.5).forEach { dbm ->
+                    DropdownMenuItem(
+                        text = { Text("%.1f dBm".format(dbm)) },
+                        onClick = { txMenuOpen = false; vm.setTxPower(dbm) },
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.height(20.dp))

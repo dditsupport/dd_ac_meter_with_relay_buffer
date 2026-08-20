@@ -51,7 +51,13 @@ data class RelayState(
     @SerialName("sched_version") val schedVersion: Int = 0,
 )
 
-/** Wi-Fi Status characteristic shape: {"status":"connected","ssid":"..."} */
+/**
+ * Wi-Fi Status characteristic shape:
+ *   {"status":"connected","ssid":"...","saved_ssid":"...","tx_power_dbm":13.0}
+ * `ssid` is the live association (present only when connected); `savedSsid` is
+ * the credential stored on the device, shown even when offline. `txPowerDbm` is
+ * the device's current Wi-Fi TX power.
+ */
 @Serializable
 data class WifiStatus(
     val status: String,
@@ -59,4 +65,6 @@ data class WifiStatus(
     val ip: String? = null,
     val detail: String? = null,
     val next: String? = null,
+    @SerialName("saved_ssid")   val savedSsid: String? = null,
+    @SerialName("tx_power_dbm") val txPowerDbm: Double? = null,
 )
