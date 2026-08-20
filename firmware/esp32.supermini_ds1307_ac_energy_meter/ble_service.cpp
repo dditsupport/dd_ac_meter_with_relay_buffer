@@ -415,6 +415,23 @@ class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
       return;
     }
 
+    // Command shape: {"action":"set_tx_power","dbm":13}  (dbm may be fractional,
+    // e.g. 8.5). Stored in quarter-dBm units and applied to the radio now and on
+    // every subsequent connect.
+    if (action == "set_tx_power") {
+      float dbm = doc["dbm"] | 0.0f;
+      int qdbm = (int)(dbm * 4.0f + (dbm >= 0 ? 0.5f : -0.5f));
+      if (storage::set_wifi_tx_power_qdbm(qdbm)) {
+        WiFi.setTxPower((wifi_power_t)qdbm);   // apply immediately; also on next connect
+        LOG_PRINTF("[ble] tx power set to %.2f dBm (qdbm=%d)\n", (double)dbm, qdbm);
+        s_wifi_status_json = "";  // force tick() to rebuild + push the new value
+      } else {
+        LOG_PRINTF("[ble] tx power rejected: %.2f dBm (qdbm=%d, valid 2..21 dBm)\n",
+                      (double)dbm, qdbm);
+      }
+      return;
+    }
+
     // Credential shape: {"ssid":"...","password":"..."}
     String ssid = (const char *)(doc["ssid"] | "");
     String pass = (const char *)(doc["password"] | "");
@@ -648,12 +665,22 @@ void tick() {
   // app show "Idle" for a device that's actually online. When connected we
   // include the SSID and IP so the app can display them.
   {
+    // Saved SSID + current TX power ride the status JSON regardless of
+    // connection state, so the app's Wi-Fi screen can show what's configured
+    // even while the device is offline. The password is never exposed.
+    storage::WifiCred creds[MAX_WIFI_CREDS];
+    size_t nc = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
+    String saved_ssid = nc > 0 ? creds[0].ssid : String();
+    float tx_dbm = storage::wifi_tx_power_qdbm() / 4.0f;
+
     String out;
     if (WiFi.isConnected()) {
-      StaticJsonDocument<192> doc;
+      StaticJsonDocument<256> doc;
       doc["status"] = "connected";
       doc["ssid"]   = WiFi.SSID();
       doc["ip"]     = WiFi.localIP().toString();
+      doc["saved_ssid"]   = saved_ssid;
+      doc["tx_power_dbm"] = tx_dbm;
       serializeJson(doc, out);
     } else {
       // Not associated — surface the transient state so the user still sees
@@ -667,8 +694,10 @@ void tick() {
           default:              st = "disconnected"; break;
         }
       }
-      StaticJsonDocument<96> doc;
+      StaticJsonDocument<192> doc;
       doc["status"] = st;
+      doc["saved_ssid"]   = saved_ssid;
+      doc["tx_power_dbm"] = tx_dbm;
       serializeJson(doc, out);
     }
     if (out != s_wifi_status_json) {

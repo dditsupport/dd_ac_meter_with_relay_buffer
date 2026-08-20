@@ -142,7 +142,7 @@ static bool try_connect_known() {
     // This MUST be reapplied after every begin(): the driver resets TX power on
     // mode changes / reconnect, so a one-time call in setup() silently drifts
     // back to max on the first reconnect.
-    WiFi.setTxPower(WIFI_TX_POWER);
+    WiFi.setTxPower((wifi_power_t)storage::wifi_tx_power_qdbm());
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED &&
            millis() - start < WIFI_CONNECT_TIMEOUT_MS) {

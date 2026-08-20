@@ -23,6 +23,10 @@ data class WifiConfigUi(
     val saving: Boolean = false,
     val message: String = "",
     val log: List<String> = emptyList(),
+    // SSID currently saved on the device (shown even when offline) and the
+    // device's current Wi-Fi TX power in dBm.
+    val savedSsid: String = "",
+    val txPowerDbm: Double? = null,
 )
 
 /**
@@ -64,8 +68,16 @@ class WifiConfigViewModel(private val gatt: MeterGatt) : ViewModel() {
     }
 
     private fun applyStatus(st: WifiStatus) {
+        val saved = st.savedSsid ?: _ui.value.savedSsid
         _ui.value = _ui.value.copy(
             status = st,
+            savedSsid = saved,
+            txPowerDbm = st.txPowerDbm ?: _ui.value.txPowerDbm,
+            // Prefill the SSID field with the saved network so the user can see
+            // (and re-enter the password for) what's configured, until they pick
+            // another. Never overwrite an SSID the user is actively editing.
+            selected = if (_ui.value.selected.isBlank() && saved.isNotBlank())
+                           saved else _ui.value.selected,
             log = (_ui.value.log + "status: ${st.status}").takeLast(20),
         )
         // If we were waiting on a save, turn the device's status into feedback.
@@ -126,6 +138,23 @@ class WifiConfigViewModel(private val gatt: MeterGatt) : ViewModel() {
 
     fun setPassword(pw: String) {
         _ui.value = _ui.value.copy(password = pw)
+    }
+
+    /** Set the device's Wi-Fi TX power (dBm). Optimistically updates the UI,
+     *  then reads status back to confirm the applied value. */
+    fun setTxPower(dbm: Double) {
+        _ui.value = _ui.value.copy(txPowerDbm = dbm, message = "Setting TX power to $dbm dBm…")
+        viewModelScope.launch {
+            runCatching { gatt.writeWifiConfig("""{"action":"set_tx_power","dbm":$dbm}""") }
+                .onSuccess {
+                    _ui.value = _ui.value.copy(message = "TX power set to $dbm dBm.")
+                    delay(600)  // let the device store + rebuild status
+                    runCatching { gatt.readWifiStatus() }.getOrNull()?.let { applyStatus(it) }
+                }
+                .onFailure {
+                    _ui.value = _ui.value.copy(message = "Couldn't set TX power: ${it.message}")
+                }
+        }
     }
 
     fun saveCredentials() {

@@ -75,6 +75,13 @@ bool set_ingest_host(const String &host);
 uint32_t log_interval_sec();
 bool set_log_interval_sec(uint32_t sec);
 
+// Wi-Fi TX power in quarter-dBm units — the ESP32 wifi_power_t values are
+// exactly dBm*4 (e.g. 52 = 13 dBm, 44 = 11 dBm). Runtime-settable over BLE so
+// the installer can trim TX power to what the board's supply/antenna allows;
+// falls back to the compiled WIFI_TX_POWER default. Valid range 8..84 (2..21 dBm).
+int  wifi_tx_power_qdbm();
+bool set_wifi_tx_power_qdbm(int qdbm);
+
 // "Today" anchor — the PZEM cumulative-Wh value captured at the start of
 // today. today_kwh is computed as (current_pzem_wh - anchor) /
 // 1000 so it survives ESP32 reboots without re-integration on the MCU.

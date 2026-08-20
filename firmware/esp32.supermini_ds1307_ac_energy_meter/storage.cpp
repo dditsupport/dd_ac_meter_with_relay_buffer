@@ -386,6 +386,17 @@ bool set_log_interval_sec(uint32_t sec) {
   return true;
 }
 
+int wifi_tx_power_qdbm() {
+  return s_cfg.getInt("txpwr", (int)WIFI_TX_POWER);
+}
+bool set_wifi_tx_power_qdbm(int qdbm) {
+  // esp_wifi accepts 8..84 quarter-dBm (2..21 dBm); reject anything else.
+  if (qdbm < 8 || qdbm > 84) return false;
+  if (s_cfg.getInt("txpwr", -1) == qdbm) return true;  // no-op write guard
+  s_cfg.putInt("txpwr", qdbm);
+  return true;
+}
+
 float today_anchor_wh() {
   return s_state.getFloat("tdy_wh", -1.0f);
 }
