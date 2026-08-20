@@ -78,7 +78,7 @@ bool set_log_interval_sec(uint32_t sec);
 // Wi-Fi TX power in quarter-dBm units — the ESP32 wifi_power_t values are
 // exactly dBm*4 (e.g. 52 = 13 dBm, 44 = 11 dBm). Runtime-settable over BLE so
 // the installer can trim TX power to what the board's supply/antenna allows;
-// falls back to the compiled WIFI_TX_POWER default. Valid range 8..84 (2..21 dBm).
+// falls back to the compiled WIFI_TX_POWER_QDBM default. Valid range 8..84 (2..21 dBm).
 int  wifi_tx_power_qdbm();
 bool set_wifi_tx_power_qdbm(int qdbm);
 

@@ -387,7 +387,7 @@ bool set_log_interval_sec(uint32_t sec) {
 }
 
 int wifi_tx_power_qdbm() {
-  return s_cfg.getInt("txpwr", (int)WIFI_TX_POWER);
+  return s_cfg.getInt("txpwr", WIFI_TX_POWER_QDBM);
 }
 bool set_wifi_tx_power_qdbm(int qdbm) {
   // esp_wifi accepts 8..84 quarter-dBm (2..21 dBm); reject anything else.
