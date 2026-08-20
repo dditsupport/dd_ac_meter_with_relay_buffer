@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <nvs_flash.h>
 #include "log_serial.h"
 
 namespace storage {
@@ -20,6 +21,7 @@ static uint64_t s_seq_hwm = 0;
 static uint32_t s_unsynced_count = 0;
 static bool s_buffer_full = false;
 static uint32_t s_partition_total = 0;
+static volatile bool s_factory_reset_req = false;
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -185,8 +187,17 @@ bool begin() {
   if (!s_log_mutex) return false;
 
   if (!LittleFS.begin(true)) {
-    LOG_PRINTLN("[storage] LittleFS mount failed");
-    return false;
+    // begin(true) is meant to format-on-fail, but that path can itself return
+    // false on a partition left inconsistent by a reset caught mid-write (it
+    // sometimes formats yet fails to remount in the same call). Force an
+    // explicit reformat + remount rather than bricking the device on a fatal —
+    // the buffered rows are expendable, a dead unit isn't.
+    LOG_PRINTLN("[storage] LittleFS mount failed — forcing reformat");
+    if (!LittleFS.format() || !LittleFS.begin(false)) {
+      LOG_PRINTLN("[storage] LittleFS reformat failed; check flash");
+      return false;
+    }
+    LOG_PRINTLN("[storage] LittleFS reformatted OK (buffered rows lost)");
   }
   s_partition_total = LittleFS.totalBytes();
 
@@ -375,6 +386,17 @@ bool set_log_interval_sec(uint32_t sec) {
   return true;
 }
 
+int wifi_tx_power_qdbm() {
+  return s_cfg.getInt("txpwr", WIFI_TX_POWER_QDBM);
+}
+bool set_wifi_tx_power_qdbm(int qdbm) {
+  // esp_wifi accepts 8..84 quarter-dBm (2..21 dBm); reject anything else.
+  if (qdbm < 8 || qdbm > 84) return false;
+  if (s_cfg.getInt("txpwr", -1) == qdbm) return true;  // no-op write guard
+  s_cfg.putInt("txpwr", qdbm);
+  return true;
+}
+
 float today_anchor_wh() {
   return s_state.getFloat("tdy_wh", -1.0f);
 }
@@ -535,6 +557,43 @@ void clear_log() {
   s_unsynced_count = 0;
   unlock_log();
   LOG_PRINTLN("[storage] log cleared");
+}
+
+// ---- Factory reset ----------------------------------------------------------
+
+void request_factory_reset() { s_factory_reset_req = true; }
+
+bool consume_factory_reset_request() {
+  if (!s_factory_reset_req) return false;
+  s_factory_reset_req = false;
+  return true;
+}
+
+void factory_reset() {
+  // Take the log lock and intentionally never release it: the device reboots
+  // right after, and holding it guarantees no task appends to LittleFS while we
+  // format — a write caught mid-flight by the reboot is exactly what can leave
+  // the filesystem unmountable on the next boot.
+  lock_log();
+
+  // Close our own NVS handles so the partition can be deinitialized, then erase
+  // the WHOLE default NVS partition — every namespace (cfg, state, relay,
+  // health) at once, which also future-proofs this against namespaces added
+  // later. After erase the device boots exactly as if freshly flashed:
+  // boot_id/seq reset, no Wi-Fi creds, default host + log interval, no relay
+  // schedule, cleared boot-loop history.
+  s_cfg.end();
+  s_state.end();
+  esp_err_t derr = nvs_flash_deinit();
+  esp_err_t eerr = nvs_flash_erase();
+  LOG_PRINTF("[storage] NVS wipe: deinit=%d erase=%d\n", (int)derr, (int)eerr);
+
+  // Reformat LittleFS for a clean, consistent buffer — more robust than removing
+  // individual files, which could leave a partially written file across reboot.
+  bool fmt = LittleFS.format();
+  s_unsynced_count = 0;
+  LOG_PRINTF("[storage] LittleFS format: %d\n", (int)fmt);
+  LOG_PRINTLN("[storage] FACTORY RESET complete — rebooting as a fresh device");
 }
 
 }  // namespace storage
