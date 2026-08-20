@@ -18,16 +18,25 @@ if (PHP_VERSION_ID < 80200) {
     exit("AC Energy Meter backend requires PHP 8.2+; this host runs " . PHP_VERSION . ".\n");
 }
 
-// Locate secrets.php. Preferred location is outside the document root
-// (e.g. /home/<cpaneluser>/meter_secrets/secrets.php) so the file is
-// unreachable over HTTP even if the web server's deny-rules are removed.
-// Falls back to the in-tree _config/ directory if the env var or the
-// out-of-tree path aren't present (handy for local dev).
+// Locate secrets.php. Preferred location is outside the document root so the
+// file is unreachable over HTTP even if the web server's deny-rules are removed.
+//
+// Layout note: the app is served from the ac.aromen.biz subdomain, whose
+// document root IS the app folder (e.g. /home/<cpaneluser>/ac.aromen.biz), so
+// this file sits at <docroot>/api/. That is one level shallower than the old
+// public_html/meter/api/, hence dirname(__DIR__, 2) — not 3 — to reach the
+// cPanel home directory.
 (function (): void {
     $candidates = array_filter([
         getenv('METER_SECRETS_PATH') ?: null,
-        dirname(__DIR__, 3) . '/meter_secrets/secrets.php', // /home/<cpaneluser>/meter_secrets/secrets.php
-        __DIR__ . '/../../_config/secrets.php',             // legacy in-tree
+        // /home/<cpaneluser>/meter_secrets/secrets.php — fully outside any docroot.
+        dirname(__DIR__, 2) . '/meter_secrets/secrets.php',
+        // /home/<cpaneluser>/_config/secrets.php — sibling of the docroot, also
+        // outside it. This is where `_config/` lands when deployed as documented.
+        __DIR__ . '/../../_config/secrets.php',
+        // <docroot>/_config/secrets.php — last resort if _config/ was uploaded
+        // INSIDE the docroot; only safe while _config/.htaccess is honoured.
+        __DIR__ . '/../_config/secrets.php',
     ]);
     foreach ($candidates as $p) {
         if (is_file($p)) { require_once $p; return; }
@@ -126,7 +135,7 @@ function start_user_session(): void {
     // reap them early. Falls back to the default save path if we can't create
     // or write it. NB: changing the save path logs everyone out once, since the
     // old session files no longer resolve.
-    $sess_dir = dirname(__DIR__, 3) . '/meter_sessions';
+    $sess_dir = dirname(__DIR__, 2) . '/meter_sessions';
     if ((is_dir($sess_dir) || @mkdir($sess_dir, 0700, true)) && is_writable($sess_dir)) {
         session_save_path($sess_dir);
     }

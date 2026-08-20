@@ -78,24 +78,38 @@ backend/
    `firmware/esp32.supermini_ds1307_ac_energy_meter/config.h`.
 
 3. **Upload** — the app is served from the **`ac.aromen.biz` subdomain**, whose
-   document root is the app folder itself (there is no `/meter` path segment any
-   more). Point the subdomain at a directory — e.g. `~/ac.aromen.biz` — then
-   upload the contents of `public_html/meter/` **into that document root**, so
-   `api/`, `dashboard/`, `admin/` and `bootstrap.php` sit at its top level and
-   the URLs come out as `https://ac.aromen.biz/api/ingest.php`,
-   `https://ac.aromen.biz/dashboard/`, etc.
+   document root **is** the app folder (there is no `/meter` path segment any
+   more). Upload the contents of `public_html/meter/` into that document root,
+   and `public_html/_config/` one level above it:
 
-   Upload `public_html/_config/` **one level above** the document root (a
-   sibling of `api/`'s parent). `api/_db.php` looks for secrets at
-   `__DIR__/../../_config/secrets.php`, which resolves to exactly that spot —
-   and being outside the document root, it can't be fetched over HTTP at all.
+   ```
+   /home/<cpaneluser>/
+   ├── _config/                 <- secrets.php (outside the docroot)
+   ├── meter_secrets/           <- optional alternative secrets location
+   ├── meter_sessions/          <- auto-created session store
+   └── ac.aromen.biz/           <- SUBDOMAIN DOCUMENT ROOT
+       ├── api/                 <- ingest.php, login.php, readings.php, ...
+       ├── dashboard/
+       ├── admin/
+       └── bootstrap.php
+   ```
 
-4. **Verify secrets aren't served** — `_config/` sits above the document root,
-   so `https://ac.aromen.biz/_config/secrets.php` should return 404 (nothing is
-   mapped there). If you instead placed `_config/` *inside* the document root,
-   check that URL returns 403 via the bundled `.htaccess`; if it serves the
-   file, your host doesn't honor `Require all denied` — move `_config/` back
-   above the document root.
+   URLs then come out as `https://ac.aromen.biz/api/ingest.php`,
+   `https://ac.aromen.biz/dashboard/`, and so on.
+
+   Because `api/` now sits **two** levels below the home directory (it was three
+   under the old `public_html/meter/api/`), `api/_db.php` resolves its
+   out-of-docroot paths with `dirname(__DIR__, 2)`. It tries `METER_SECRETS_PATH`,
+   then `~/meter_secrets/secrets.php`, then `~/_config/secrets.php`, and finally
+   `<docroot>/_config/secrets.php`. If you relocate the app to a different depth,
+   those two `dirname(__DIR__, 2)` calls (secrets + session dir) are what to adjust.
+
+4. **Verify secrets aren't served** — with the layout above, `_config/` is above
+   the document root, so `https://ac.aromen.biz/_config/secrets.php` should
+   return 404 (nothing is mapped there). Only if you put `_config/` *inside* the
+   document root does it need the bundled `.htaccess` to return 403 — and if it
+   serves the file instead, your host doesn't honor `Require all denied`, so move
+   `_config/` back above the document root.
 
 5. **First admin login** — visit
    `https://ac.aromen.biz/bootstrap.php`. The page creates the
