@@ -176,10 +176,10 @@ function current_user(): ?array {
 function require_login(): array {
     $u = current_user();
     if (!$u) {
-        if (str_starts_with($_SERVER['REQUEST_URI'] ?? '', '/meter/api/')) {
+        if (str_starts_with($_SERVER['REQUEST_URI'] ?? '', '/api/')) {
             json_response(401, ['ok' => false, 'error' => 'login_required']);
         }
-        header('Location: /meter/dashboard/login.php');
+        header('Location: /dashboard/login.php');
         exit;
     }
     return $u;

@@ -73,7 +73,7 @@ dependencies {
     // BLE (Kotlin-first, Flow-based GATT)
     implementation(libs.kable.core)
 
-    // HTTP client for /meter/api/*
+    // HTTP client for /api/*
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)

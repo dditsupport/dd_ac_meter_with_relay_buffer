@@ -72,11 +72,11 @@ fun ServerConfigScreen(
         OutlinedTextField(
             value = host,
             onValueChange = { host = it; saved = null; error = null },
-            label = { Text("Host (e.g. https://aromen.biz)") },
+            label = { Text("Host (e.g. https://ac.aromen.biz)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text("Path is firmware-hardcoded: ${ui.info?.ingestPath ?: "/meter/api/ingest.php"}",
+        Text("Path is firmware-hardcoded: ${ui.info?.ingestPath ?: "/api/ingest.php"}",
              style = MaterialTheme.typography.bodySmall,
              color = MaterialTheme.colorScheme.onSurfaceVariant)
 

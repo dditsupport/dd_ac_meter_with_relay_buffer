@@ -23,7 +23,7 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
 /**
- * Talks to the /meter/api endpoints. One instance per app process; cookies
+ * Talks to the /api endpoints. One instance per app process; cookies
  * persist for the lifetime of this object (cleared on logout). The base URL
  * is user-settable from the Cloud Login screen so the same APK works against
  * staging/prod/self-hosted MilesWeb installs.
@@ -37,7 +37,7 @@ class CloudClient(
         coerceInputValues = true
     }
 
-    @Volatile var baseUrl: String = "https://aromen.biz"
+    @Volatile var baseUrl: String = "https://ac.aromen.biz"
         private set
 
     /** CSRF token returned by /api/login.php. Sent as X-CSRF on state-changing calls. */
@@ -66,7 +66,7 @@ class CloudClient(
 
     suspend fun login(username: String, password: String): LoginResponse {
         val resp: HttpResponse = http.submitForm(
-            url = "$baseUrl/meter/api/login.php",
+            url = "$baseUrl/api/login.php",
             formParameters = Parameters.build {
                 append("username", username)
                 append("password", password)
@@ -94,7 +94,7 @@ class CloudClient(
     ): ClaimDeviceResponse {
         ensureCsrf()
         val resp: HttpResponse = http.submitForm(
-            url = "$baseUrl/meter/api/claim_device.php",
+            url = "$baseUrl/api/claim_device.php",
             formParameters = Parameters.build {
                 append("device_id",     deviceId)
                 append("friendly_name", friendlyName)
@@ -109,7 +109,7 @@ class CloudClient(
     }
 
     suspend fun logout(): Boolean {
-        val resp: HttpResponse = http.post("$baseUrl/meter/api/logout.php") {
+        val resp: HttpResponse = http.post("$baseUrl/api/logout.php") {
             header("Accept", "application/json")
         }
         // Clear the local cookie storage and CSRF token even if the server
@@ -121,7 +121,7 @@ class CloudClient(
     }
 
     suspend fun devices(): DevicesResponse =
-        http.get("$baseUrl/meter/api/devices.php").body()
+        http.get("$baseUrl/api/devices.php").body()
 
     /**
      * Public, no-auth check used by the BLE access gate: is this device_id
@@ -129,14 +129,14 @@ class CloudClient(
      * units can be provisioned.
      */
     suspend fun bleRegistered(deviceId: String): BleRegisteredResponse =
-        http.get("$baseUrl/meter/api/ble_registered.php") {
+        http.get("$baseUrl/api/ble_registered.php") {
             parameter("device_id", deviceId)
         }.body()
 
     /** Refresh the CSRF token using the existing session cookie. No-op if not logged in. */
     suspend fun refreshCsrf(): String? {
         val resp: CsrfResponse = runCatching {
-            http.get("$baseUrl/meter/api/csrf.php").body<CsrfResponse>()
+            http.get("$baseUrl/api/csrf.php").body<CsrfResponse>()
         }.getOrElse { return null }
         if (resp.ok && !resp.csrf.isNullOrBlank()) {
             csrf = resp.csrf
@@ -154,7 +154,7 @@ class CloudClient(
         aggregate: String,
         fromIso: String? = null,
         toIso: String? = null,
-    ): ReadingsResponse = http.get("$baseUrl/meter/api/readings.php") {
+    ): ReadingsResponse = http.get("$baseUrl/api/readings.php") {
         parameter("device_id", deviceId)
         parameter("aggregate", aggregate)
         if (fromIso != null) parameter("from", fromIso)
@@ -165,7 +165,7 @@ class CloudClient(
      * Used by the BLE-relay path: forwards rows received over BLE to the
      * same endpoint the firmware would have used directly over Wi-Fi.
      *
-     * Two auth modes are supported by /meter/api/ingest.php:
+     * Two auth modes are supported by /api/ingest.php:
      *   1. X-Device-Token header — the firmware path. Only set if [token]
      *      is non-blank (which it usually isn't on the phone).
      *   2. Session cookie + X-CSRF header — what the Android app uses
@@ -178,7 +178,7 @@ class CloudClient(
         // Android relay path). Make sure CSRF is loaded — it might not be on
         // a cold start with persisted cookies.
         if (token.isBlank()) ensureCsrf()
-        val resp: HttpResponse = http.post("$baseUrl/meter/api/ingest.php") {
+        val resp: HttpResponse = http.post("$baseUrl/api/ingest.php") {
             contentType(ContentType.Application.Json)
             if (token.isNotBlank()) header("X-Device-Token", token)
             if (csrf.isNotBlank())  header("X-CSRF", csrf)

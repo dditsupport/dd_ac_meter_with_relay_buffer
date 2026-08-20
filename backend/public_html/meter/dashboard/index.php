@@ -54,7 +54,7 @@ if ($selected !== '') {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — dashboard</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
@@ -73,11 +73,11 @@ if ($selected !== '') {
   <div class="brand">AC Energy Meter</div>
   <div class="user">
     Signed in as <b><?= h($user['username']) ?></b>
-    &middot; <a href="/meter/dashboard/report.php">reports</a>
+    &middot; <a href="/dashboard/report.php">reports</a>
     <?php if (!empty($user['is_admin'])): ?>
-      &middot; <a href="/meter/admin/">admin</a>
+      &middot; <a href="/admin/">admin</a>
     <?php endif; ?>
-    &middot; <a href="/meter/api/logout.php">sign out</a>
+    &middot; <a href="/api/logout.php">sign out</a>
   </div>
 </header>
 
@@ -86,7 +86,7 @@ if ($selected !== '') {
   <div class="card empty">
     <p>You don't have any devices bound to your account yet.</p>
     <?php if (!empty($user['is_admin'])): ?>
-      <p>Go to <a href="/meter/admin/">Admin</a> &rarr; Devices to bind one.</p>
+      <p>Go to <a href="/admin/">Admin</a> &rarr; Devices to bind one.</p>
     <?php else: ?>
       <p>Ask an administrator to bind your device to this account.</p>
     <?php endif; ?>
@@ -255,7 +255,7 @@ async function loadRange(rangeKey){
   document.getElementById('chart-title').textContent = R.label;
   const from = isoLocal(R.from());
   const readingsUrl = agg =>
-    `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+    `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
     `&aggregate=${agg}&from=${encodeURIComponent(from)}`;
 
   const res = await fetch(readingsUrl(R.aggregate), { credentials: 'same-origin' });
@@ -311,7 +311,7 @@ async function loadRange(rangeKey){
 
 async function loadLive(){
   const from = isoLocal(hoursAgo(1));
-  const url = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=raw&from=${encodeURIComponent(from)}`;
+  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=raw&from=${encodeURIComponent(from)}`;
   let now = null;
   try {
     const res = await fetch(url, { credentials: 'same-origin' });
@@ -333,7 +333,7 @@ async function loadLive(){
   let baseline = 0;
   try {
     const today = isoLocal(startOfToday());
-    const url2 = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=hourly&from=${encodeURIComponent(today)}`;
+    const url2 = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=hourly&from=${encodeURIComponent(today)}`;
     const r2 = await (await fetch(url2, { credentials: 'same-origin' })).json();
     baseline = Number(r2.capacity_kw) || 0;
     if (r2.ok) {
@@ -414,7 +414,7 @@ document.querySelector('.range-buttons button[data-range="today"]').click();
   async function refresh(){
     try {
       const r = await (await fetch(
-        `/meter/api/relay_state.php?device_id=${encodeURIComponent(DEVICE_ID)}`,
+        `/api/relay_state.php?device_id=${encodeURIComponent(DEVICE_ID)}`,
         { credentials: 'same-origin' })).json();
       if (r && r.ok) render({ on: r.on, mode: r.mode, at: r.reported_at, interval: r.interval });
     } catch (e) { /* keep last paint */ }

@@ -1,5 +1,5 @@
 <?php
-// GET /meter/api/relay_state.php?device_id=X
+// GET /api/relay_state.php?device_id=X
 // Session-authed. Returns the device's last-reported relay state for the
 // live dashboard indicator. Respects per-user device visibility. The state
 // is whatever the firmware last reported on an ingest POST.

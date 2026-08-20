@@ -7,5 +7,5 @@ logout_user();
 if (str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')) {
     json_response(200, ['ok' => true]);
 }
-header('Location: /meter/dashboard/login.php');
+header('Location: /dashboard/login.php');
 exit;

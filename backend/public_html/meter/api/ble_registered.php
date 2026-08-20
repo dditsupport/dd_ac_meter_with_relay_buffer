@@ -1,5 +1,5 @@
 <?php
-// GET /meter/api/ble_registered.php?device_id=X
+// GET /api/ble_registered.php?device_id=X
 // PUBLIC (no auth). Returns whether a device_id is registered on the server.
 //
 // The Android app uses this to gate BLE access: an unregistered device is

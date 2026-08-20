@@ -51,7 +51,7 @@ $locations = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — devices</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 <style>
   /* Devices as compact 2-line cards — everything fits the viewport width by
      wrapping, so there is no left/right scrolling. */
@@ -95,9 +95,9 @@ $locations = $pdo->query(
 <header class="topbar">
   <div class="brand">AC Energy Meter — admin</div>
   <div class="user">
-    <a href="/meter/admin/">overview</a>
-    &middot; <a href="/meter/admin/users.php">users</a>
-    &middot; <a href="/meter/api/logout.php">sign out</a>
+    <a href="/admin/">overview</a>
+    &middot; <a href="/admin/users.php">users</a>
+    &middot; <a href="/api/logout.php">sign out</a>
   </div>
 </header>
 <main class="container">
@@ -181,7 +181,7 @@ $locations = $pdo->query(
             <span class="dev-actions">
               <button class="rename">Save</button>
               <button class="relay">Relay</button>
-              <a href="/meter/dashboard/?device_id=<?= urlencode($d['device_id']) ?>">view</a>
+              <a href="/dashboard/?device_id=<?= urlencode($d['device_id']) ?>">view</a>
               <button class="danger delete-device">Delete</button>
             </span>
           </div>
@@ -268,7 +268,7 @@ async function post(action, fields){
   fd.append('action', action);
   fd.append('csrf', CSRF);
   for (const k in fields) fd.append(k, fields[k]);
-  const res = await fetch('/meter/api/admin_devices.php', { method: 'POST', body: fd, credentials: 'same-origin' });
+  const res = await fetch('/api/admin_devices.php', { method: 'POST', body: fd, credentials: 'same-origin' });
   return res.json();
 }
 
@@ -326,7 +326,7 @@ async function postRelay(action, fields) {
   fd.append('action', action);
   fd.append('csrf', CSRF);
   for (const k in fields) fd.append(k, fields[k]);
-  const res = await fetch('/meter/api/admin_relay.php',
+  const res = await fetch('/api/admin_relay.php',
                           { method:'POST', body:fd, credentials:'same-origin' });
   return res.json();
 }

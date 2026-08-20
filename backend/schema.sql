@@ -3,7 +3,7 @@
 -- All meter tables are prefixed `ed_` so they live alongside the WorkPulse
 -- tables in one database (e.g. gtvpheud_workpulse). Each meter is linked to a
 -- WorkPulse store via ed_energy_devices.location -> locations.location_id, so
--- the WorkPulse app can show energy data per location while aromen.biz/meter
+-- the WorkPulse app can show energy data per location while ac.aromen.biz
 -- keeps posting readings and rendering its own graphs from the same tables.
 --
 -- REQUIRES the WorkPulse `locations` table to already exist (for the FK).
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS ed_device_relay_schedule (
 -- Do NOT create the admin user via schema.sql — bcrypt hashes need to be
 -- generated with PHP's password_hash() on the host. After running this
 -- schema, visit
---   https://<your-domain>/meter/bootstrap.php
+--   https://<your-domain>/bootstrap.php
 -- in a browser. It runs ONLY if no admin user exists (in ed_users); you'll set
 -- the initial admin username and password from there, then the script refuses
 -- to do anything on subsequent visits.

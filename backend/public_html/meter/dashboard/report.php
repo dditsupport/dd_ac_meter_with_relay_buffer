@@ -35,7 +35,7 @@ $month_ist = date('Y-m');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — reports</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <style>
   .report-controls .month-pick { display: none; }
@@ -57,11 +57,11 @@ $month_ist = date('Y-m');
 <header class="topbar">
   <div class="brand">AC Energy Meter — reports</div>
   <div class="user">
-    <a href="/meter/dashboard/">dashboard</a>
+    <a href="/dashboard/">dashboard</a>
     <?php if (!empty($user['is_admin'])): ?>
-      &middot; <a href="/meter/admin/">admin</a>
+      &middot; <a href="/admin/">admin</a>
     <?php endif; ?>
-    &middot; <a href="/meter/api/logout.php">sign out</a>
+    &middot; <a href="/api/logout.php">sign out</a>
   </div>
 </header>
 
@@ -192,7 +192,7 @@ async function load() {
   document.getElementById('report-title').textContent = R.title;
   document.getElementById('report-sub').textContent   = R.sub;
 
-  const url = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
               `&aggregate=hourly&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   let j;
   try {
@@ -231,7 +231,7 @@ async function load() {
   // MAX-MIN per day) rather than the sum of hourly buckets, so they line up
   // with the dashboard. Pull the daily aggregate for that; the hourly series
   // above still drives the chart lines.
-  const dailyUrl = `/meter/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+  const dailyUrl = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
                    `&aggregate=daily&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   const dayTotals = new Map();                   // "YYYY-MM-DD" -> kWh (start->end)
   let rangeTotal = null;                          // whole-period start->end kWh

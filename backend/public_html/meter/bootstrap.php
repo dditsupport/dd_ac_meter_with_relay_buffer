@@ -15,7 +15,7 @@ if ($has_admin) {
     echo '<!doctype html><meta charset=utf-8><title>Already initialized</title>';
     echo '<h1>Already initialized</h1>';
     echo '<p>An admin user exists. This page is now locked.</p>';
-    echo '<p><a href="/meter/dashboard/login.php">Sign in</a> with that admin to manage users.</p>';
+    echo '<p><a href="/dashboard/login.php">Sign in</a> with that admin to manage users.</p>';
     echo '<p>If you locked yourself out, delete the row from the <code>users</code> table and reload this page.</p>';
     exit;
 }
@@ -39,7 +39,7 @@ function create_first_admin(PDO $pdo, string $u, #[\SensitiveParameter] string $
     $pdo->prepare(
         'INSERT INTO ed_users (username, password_hash, is_admin) VALUES (?, ?, 1)'
     )->execute([$u, password_hash($p, PASSWORD_DEFAULT)]);
-    header('Location: /meter/dashboard/login.php');
+    header('Location: /dashboard/login.php');
     exit;
 }
 ?>
@@ -48,7 +48,7 @@ function create_first_admin(PDO $pdo, string $u, #[\SensitiveParameter] string $
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — first-run setup</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 </head><body class="auth">
 <form method="post" class="card login">
   <h1>First-run setup</h1>

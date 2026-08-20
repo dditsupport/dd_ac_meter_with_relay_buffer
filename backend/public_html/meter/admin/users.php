@@ -13,14 +13,14 @@ $rows = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — users</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 </head><body>
 <header class="topbar">
   <div class="brand">AC Energy Meter — admin</div>
   <div class="user">
-    <a href="/meter/admin/">overview</a>
-    &middot; <a href="/meter/admin/devices.php">devices</a>
-    &middot; <a href="/meter/api/logout.php">sign out</a>
+    <a href="/admin/">overview</a>
+    &middot; <a href="/admin/devices.php">devices</a>
+    &middot; <a href="/api/logout.php">sign out</a>
   </div>
 </header>
 <main class="container">
@@ -74,7 +74,7 @@ async function post(action, fields){
   fd.append('action', action);
   fd.append('csrf', CSRF);
   for (const k in fields) fd.append(k, fields[k]);
-  const res = await fetch('/meter/api/admin_users.php', { method: 'POST', body: fd, credentials: 'same-origin' });
+  const res = await fetch('/api/admin_users.php', { method: 'POST', body: fd, credentials: 'same-origin' });
   return res.json();
 }
 
