@@ -57,7 +57,7 @@ lives in RAM, so a power-cycle returns the meter to its server config.
 ```
 firmware/                                             ESP32 Arduino sketches (one folder per board)
   esp32.supermini_ds1307_ac_energy_meter/             ESP32-C3 Super Mini firmware (DS1307, no OLED)
-  esp32.WROOM.DevKit.V1_SSD1306_ds3231_ac_energy_meter/  ESP32 WROOM DevKit V1 firmware (DS3231 + SSD1306 OLED)
+  esp32.WROOM.DevKit.V1_ds1307_ac_energy_meter/  ESP32 WROOM DevKit V1 firmware (DS1307, no display)
 backend/                                              MilesWeb PHP + MySQL (planned, not yet built)
 android/                                              Companion app (planned, not yet built)
 docs/                                                 Wiring, provisioning, future hardware notes
@@ -66,13 +66,25 @@ tools/                                                Bench-test helpers (fake_i
 
 Both firmware folders are self-contained Arduino sketches for the same
 meter; pick the one that matches your hardware. The `.supermini` build
-targets the ESP32-C3 Super Mini with a DS1307 RTC and no display; the
-`.WROOM.DevKit.V1` build targets the ESP32 WROOM DevKit V1 with a DS3231
-RTC and an SSD1306 OLED. They are kept separate, not merged, but track the
-same firmware version and feature set — both are now `FW_VERSION` **2.0.0**
-with the compressor-aware, fail-safe NC AC-cutoff relay (AC-allowed open-hours
-schedule; energize = cut). The only differences are the hardware bits: pin
-map, RTC part (DS1307 vs DS3231), and the WROOM build's OLED.
+targets the ESP32-C3 Super Mini; the `.WROOM.DevKit.V1` build targets the
+ESP32 WROOM DevKit V1. Both use a DS1307 RTC and neither has a display. They
+are kept separate, not merged, but track the same firmware version and feature
+set — both are now `FW_VERSION` **2.0.0** with the compressor-aware, fail-safe
+NC AC-cutoff relay (AC-allowed open-hours schedule; energize = cut).
+
+The Super Mini build is the field-tested baseline and the WROOM build carries
+the same logic. The differences are hardware-driven:
+
+| | Super Mini (ESP32-C3) | WROOM DevKit V1 |
+|---|---|---|
+| Cores / radio | single core; BLE and Wi-Fi contend | dual core; no coexistence issue |
+| BLE lifetime | 2-min config window, then handed off to Wi-Fi | BLE up for the whole session, alongside Wi-Fi |
+| Wi-Fi TX power | capped at 11 dBm (weak onboard LDO) | full 19.5 dBm |
+| PZEM UART | `Serial1` | `Serial2` |
+| Pin map | C3 pins | ESP32 pins; GPIO 6..11 reserved for SPI flash |
+
+TX power is runtime-settable over BLE on both boards, so either can be trimmed
+if a particular install proves marginal.
 
 ## How fast does data reach the cloud?
 

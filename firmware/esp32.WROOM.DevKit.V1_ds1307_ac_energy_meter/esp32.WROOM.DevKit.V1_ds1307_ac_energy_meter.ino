@@ -1,7 +1,7 @@
 // AC Energy Meter — ESP32 firmware (v1.0.0)
 //
 // Sketch entry point. Sets up the brownout detector, mounts storage, then
-// spawns two pinned FreeRTOS tasks: SamplingTask on core 0 (PZEM + OLED) and
+// spawns two pinned FreeRTOS tasks: SamplingTask on core 0 (PZEM) and
 // ConnectivityTask on core 1 (BLE always, Wi-Fi periodic). All shared mutable
 // state lives in g_state, guarded by g_state_mutex.
 //
@@ -12,7 +12,6 @@
 #include "identity.h"
 #include "time_source.h"
 #include "pzem.h"
-#include "display.h"
 #include "storage.h"
 #include "health.h"
 #include "wifi_sync.h"
@@ -62,14 +61,10 @@ void setup() {
     while (true) delay(1000);
   }
 
-  display::begin();
-  display::splash("AC Energy Meter", "booting...");
-
   time_source::begin();
   health::begin();
   if (!storage::begin()) {
     LOG_PRINTLN("[fatal] storage init failed; check flash");
-    display::splash("STORAGE FAIL", "check flash");
     while (true) delay(1000);
   }
   pzem::begin();
@@ -77,8 +72,9 @@ void setup() {
   // BOOT button for the fresh-install energy reset (long-press in loop()).
   pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
-  // Seed wall clock from the DS3231 if it's healthy. This lets the OLED show
-  // "Today:" immediately at boot instead of "Session:" until NTP or BLE.
+  // Seed wall clock from the DS1307 if it's healthy. This lets "Today:" energy
+  // totals track from boot instead of only counting the current session until
+  // NTP or BLE sets the clock.
   if (rtc::begin()) {
     time_t epoch = rtc::read_epoch();
     if (epoch > 0 && time_source::set_wall_clock(epoch)) {
@@ -186,7 +182,6 @@ void loop() {
   // context. This wipes the device to a fresh state and restarts it.
   if (storage::consume_factory_reset_request()) {
     LOG_PRINTLN("[reset] factory reset requested — wiping NVS + log, rebooting");
-    display::splash("FACTORY RESET", "wiping...");
     storage::factory_reset();
     delay(300);        // let the log line flush before the restart
     esp_restart();
@@ -284,7 +279,6 @@ static void sampling_task(void *) {
     if (reset_from_button || reset_from_ble) {
       if (pzem::reset_energy()) {
         session_anchor_wh = -1.0f;   // re-anchor session; today re-anchors on the drop
-        display::splash("Energy reset", "meter = 0");
         LOG_PRINTF("[reset] PZEM energy register zeroed (%s)\n",
                       reset_from_ble ? "BLE app" : "BOOT button");
       } else {
@@ -367,9 +361,6 @@ static void sampling_task(void *) {
     // Feed the relay's compressor-aware cutoff with the latest wattage.
     relay::update_power(sample.power, ok);
 
-    // Render OLED from a snapshot (no I/O under lock).
-    display::tick();
-
     // Periodic log row. Cadence is server-configurable (storage::log_interval_sec)
     // and falls back to LOG_INTERVAL_SEC_DEFAULT (config.h) on a fresh device.
     uint32_t log_period_sec = storage::log_interval_sec();
@@ -409,7 +400,7 @@ static void sampling_task(void *) {
       clean_uptime_marked = true;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(DISPLAY_REFRESH_MS));
+    vTaskDelay(pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
   }
 }
 

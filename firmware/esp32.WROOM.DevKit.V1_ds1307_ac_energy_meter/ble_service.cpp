@@ -231,11 +231,11 @@ class SetTimeCallbacks : public NimBLECharacteristicCallbacks {
         g_state.wall_clock_known = true;
         state_unlock();
       }
-      // Phone time is less authoritative than NTP, but if the DS3231 lost
+      // Phone time is less authoritative than NTP, but if the DS1307 lost
       // power (or isn't present), seeding it from the phone is still better
       // than nothing. RTClib's adjust() restarts the oscillator.
       if (!rtc::available() && rtc::write_epoch(epoch)) {
-        LOG_PRINTLN("[ble] DS3231 seeded from phone time");
+        LOG_PRINTLN("[ble] DS1307 seeded from phone time");
       }
       LOG_PRINTF("[ble] wall clock set to %ld\n", (long)epoch);
     }

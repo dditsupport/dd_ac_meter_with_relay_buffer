@@ -172,7 +172,7 @@ static bool try_connect_known() {
 static uint64_t s_last_ntp_us = 0;
 static bool     s_ntp_ever_ok = false;
 
-// Last measured DS3231 drift for the hourly drift log: signed seconds where
+// Last measured DS1307 drift for the hourly drift log: signed seconds where
 // + = RTC ahead of true time (running fast), and the NTP epoch at which it was
 // measured (0 = none yet). Sent in the POST; the server logs each distinct
 // measurement so drift can be tracked over time.
@@ -207,7 +207,7 @@ static bool ntp_sync_if_due() {
         g_state.wall_clock_known = true;
         state_unlock();
       }
-      // Mirror NTP-corrected time into the DS3231 so it stays accurate
+      // Mirror NTP-corrected time into the DS1307 so it stays accurate
       // across power loss. Skip the write if the RTC is already within
       // the small drift threshold to limit flash/I2C traffic.
       time_t rtc_now = rtc::read_epoch();
@@ -277,7 +277,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   doc["relay_mode"]    = relay::mode_str();   // "auto" | "on" | "off"
   doc["relay_version"] = relay::version();
 
-  // Hourly DS3231 drift (signed seconds, + = RTC ahead of true time), measured
+  // Hourly DS1307 drift (signed seconds, + = RTC ahead of true time), measured
   // at the last NTP sync. rtc_drift_epoch is the NTP epoch of that measurement;
   // the server dedups on (device_id, epoch) so each hourly sample is logged
   // once even though it rides every 2-minute POST until the next sync.
@@ -457,7 +457,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     relay::apply(rv, sched_json, cw, gm);
   }
 
-  // Server-time fallback: if neither the DS3231 nor NTP gave us a wall
+  // Server-time fallback: if neither the DS1307 nor NTP gave us a wall
   // clock, seed time_source from the server's response. The server
   // returns server_time as an ISO 8601 string (MilesWeb is in UTC by
   // default; APP_TIMEZONE in secrets.php can change that).

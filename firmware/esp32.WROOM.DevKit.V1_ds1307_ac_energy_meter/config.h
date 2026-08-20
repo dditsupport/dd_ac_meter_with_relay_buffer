@@ -46,7 +46,7 @@
 #define LOG_INTERVAL_SEC_DEFAULT 300
 #define LOG_INTERVAL_SEC_MIN     60
 #define LOG_INTERVAL_SEC_MAX     86400
-#define DISPLAY_REFRESH_MS       1000     // 1 Hz OLED refresh & PZEM sample
+#define SAMPLE_INTERVAL_MS       1000     // 1 Hz PZEM sample cadence
 #define WIFI_SCAN_INTERVAL_SEC  120       // 2 minutes between Wi-Fi cycles
 #define NTP_SYNC_TIMEOUT_MS     5000
 #define NTP_RESYNC_INTERVAL_SEC 3600      // re-hit the NTP server at most every 1 h
@@ -131,8 +131,8 @@
 
 // ---------- Demo mode ----------
 // Set to 1 to bypass the real PZEM and feed the rest of the firmware
-// synthetic (but plausible) readings. Lets you bench-test the OLED,
-// LittleFS logging, Wi-Fi sync, and BLE characteristics without having
+// synthetic (but plausible) readings. Lets you bench-test the LittleFS
+// logging, Wi-Fi sync, and BLE characteristics without having
 // the PZEM physically wired. Leave at 0 for production / real measurements.
 #define PZEM_DEMO_MODE          0
 
@@ -164,20 +164,16 @@
 #define PIN_PZEM_TX             17        // ESP32 TX2 -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_OLED_SCK            23
-#define PIN_OLED_MOSI           22
-#define PIN_OLED_RST            21
-#define PIN_OLED_DC             19
-#define PIN_OLED_CS             18        // moved off GPIO 5 (strapping pin)
-
-#define PIN_I2C_SDA             4         // DS3231 SDA
-#define PIN_I2C_SCL             15        // DS3231 SCL — GPIO 15 is a strapping pin but idles HIGH (I2C pull-ups), so boot is unaffected
-#define I2C_FREQ_HZ             400000    // DS3231 supports up to 400 kHz
+#define PIN_I2C_SDA             4         // DS1307 SDA
+#define PIN_I2C_SCL             15        // DS1307 SCL — GPIO 15 is a strapping pin but idles HIGH (I2C pull-ups), so boot is unaffected
+// The DS1307 is a STANDARD-MODE part: 100 kHz max. (The DS3231 this build used
+// to carry tolerated 400 kHz; running the DS1307 that fast is out of spec.)
+#define I2C_FREQ_HZ             100000    // DS1307 is a standard-mode (100 kHz) part
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 
 // ---------- Status LED ----------
 // Wi-Fi activity indicator. GPIO 2 is the on-board LED on most ESP32 dev
-// boards (it was freed when OLED_RST moved to GPIO 19). Set ACTIVE_HIGH to 0
+// boards. Set ACTIVE_HIGH to 0
 // if your board's LED is wired active-low.
 #define PIN_STATUS_LED          2
 #define LED_ACTIVE_HIGH         1
@@ -186,7 +182,7 @@
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
 
 // ---------- Coin-cell (RTC backup) voltage sense ----------
-// Averaged ADC read of the CR2032 coin cell that backs up the DS3231 RTC,
+// Averaged ADC read of the CR2032 coin cell that backs up the DS1307 RTC,
 // reported on each ingest POST as `coincell_mv` (millivolts) alongside
 // wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
 // lost. GPIO35 is an input-only ADC1 channel (ADC1_CH7) on the WROOM DevKit V1
