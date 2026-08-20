@@ -72,7 +72,7 @@
 // settled on 13 dBm as the stable point with peripherals wired. Applied via
 // WiFi.setTxPower() after EVERY WiFi.begin(). This is ONLY the fallback — the
 // live value lives in NVS and is settable from the app's Configure Wi-Fi screen.
-#define WIFI_TX_POWER_QDBM      52   // 13 dBm (= WIFI_POWER_13dBm)
+#define WIFI_TX_POWER_QDBM      44   // 11 dBm (= WIFI_POWER_11dBm)
 
 // Pause BLE advertising for the duration of each Wi-Fi cycle (connect + NTP +
 // TLS POST). On the single-core ESP32-C3, BLE advertising sharing the radio
