@@ -1,5 +1,5 @@
 <?php
-// POST /meter/api/claim_device.php
+// POST /api/claim_device.php
 // Lets a logged-in user register or claim a device by its device_id.
 //
 // Required:

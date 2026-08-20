@@ -10,7 +10,7 @@
 
 // ---------- Backend ----------
 // The ingest endpoint URL is split into two parts:
-//   INGEST_HOST_DEFAULT - scheme + host + optional port, e.g. "https://aromen.biz"
+//   INGEST_HOST_DEFAULT - scheme + host + optional port, e.g. "https://ac.aromen.biz"
 //                         Stored in NVS and configurable at runtime via BLE
 //                         (Server Config characteristic). This default is only
 //                         used if NVS has not been written.
@@ -20,8 +20,8 @@
 //
 // To switch backend hostnames at runtime, write {"host":"https://newdomain.com"}
 // from the companion app — no reflash needed.
-#define INGEST_HOST_DEFAULT     "https://aromen.biz"
-#define INGEST_PATH             "/meter/api/ingest.php"
+#define INGEST_HOST_DEFAULT     "https://ac.aromen.biz"
+#define INGEST_PATH             "/api/ingest.php"
 #define DEVICE_TOKEN            "token"
 
 // ---------- Wi-Fi (optional bench-test fallback) ----------
@@ -290,5 +290,5 @@
 // console clean of the Wi-Fi PHY's high-bit garbage. But that same path carries
 // the panic reason line ("CORRUPT HEAP: ...", "assert failed ...", "Guru
 // Meditation ..."), so silencing it hides *why* a crash happened. Set to 0 while
-// diagnosing crashes to see the reason; set to 1 for a quiet production console.
-#define ROM_LOG_QUIET           0
+// diagnosing crashes to see the reason; 1 = quiet production console (current).
+#define ROM_LOG_QUIET           1

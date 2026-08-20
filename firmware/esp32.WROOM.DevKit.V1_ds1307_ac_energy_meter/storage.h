@@ -61,7 +61,7 @@ void clear_wifi_creds();
 void set_last_sync_at(uint32_t epoch);
 uint32_t last_sync_at();
 
-// Backend host (scheme + host + optional port, e.g. "https://aromen.biz").
+// Backend host (scheme + host + optional port, e.g. "https://ac.aromen.biz").
 // Empty string means "use INGEST_HOST_DEFAULT compiled into config.h".
 // Updated at runtime via BLE (Server Config characteristic).
 String ingest_host();
@@ -75,8 +75,15 @@ bool set_ingest_host(const String &host);
 uint32_t log_interval_sec();
 bool set_log_interval_sec(uint32_t sec);
 
+// Wi-Fi TX power in quarter-dBm units — the ESP32 wifi_power_t values are
+// exactly dBm*4 (e.g. 52 = 13 dBm, 44 = 11 dBm). Runtime-settable over BLE so
+// the installer can trim TX power to what the board's supply/antenna allows;
+// falls back to the compiled WIFI_TX_POWER_QDBM default. Valid range 8..84 (2..21 dBm).
+int  wifi_tx_power_qdbm();
+bool set_wifi_tx_power_qdbm(int qdbm);
+
 // "Today" anchor — the PZEM cumulative-Wh value captured at the start of
-// today. today_kwh on the OLED is computed as (current_pzem_wh - anchor) /
+// today. today_kwh is computed as (current_pzem_wh - anchor) /
 // 1000 so it survives ESP32 reboots without re-integration on the MCU.
 //
 // today_anchor_wh() returns < 0 when no anchor has ever been written.
@@ -118,6 +125,19 @@ bool is_buffer_full();
 
 // Update the in-memory unsynced count exposed to SharedState.
 uint32_t current_unsynced_count();
+
+// Factory reset ---------------------------------------------------------------
+// Wipe the ENTIRE NVS partition (every namespace: cfg, state, relay, health)
+// and drop all buffered readings, returning the device to a fresh, unprovisioned
+// state. Destructive and irreversible; the caller is expected to reboot right
+// after. Because it deinitializes NVS, do not touch any Preferences/NVS after
+// calling it — just reboot.
+void factory_reset();
+
+// Request/consume flag so a BLE write can ask the main loop to run the reset +
+// reboot from a safe context rather than inside the NimBLE callback.
+void request_factory_reset();
+bool consume_factory_reset_request();
 
 // Serial helpers --------------------------------------------------------------
 void dump_log_to_serial();      // for `DUMP` command

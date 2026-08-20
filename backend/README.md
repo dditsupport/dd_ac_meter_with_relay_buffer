@@ -68,7 +68,7 @@ backend/
    written for the shared/`ed_`-prefixed schema is
    `006_rtc_drift_log.sql` (hourly DS1307 drift log + latest-drift columns) —
    run it on an existing shared DB, or just re-run `schema.sql` (idempotent).
-   aromen.biz/meter posts readings and renders its graphs from these tables as
+   ac.aromen.biz posts readings and renders its graphs from these tables as
    before; the WorkPulse app reads the same rows filtered by `location`.
 
 2. **Secrets** — copy `public_html/_config/secrets.php.example` to
@@ -77,23 +77,48 @@ backend/
    and the `ed_*` tables). The `DEVICE_TOKEN` value must match
    `firmware/esp32.supermini_ds1307_ac_energy_meter/config.h`.
 
-3. **Upload** — drop the contents of `public_html/` into your hosting's
-   `public_html/` (so the URLs end up at e.g. `https://aromen.biz/meter/...`).
+3. **Upload** — the app is served from the **`ac.aromen.biz` subdomain**, whose
+   document root **is** the app folder (there is no `/meter` path segment any
+   more). Upload the contents of `public_html/meter/` into that document root,
+   and `public_html/_config/` one level above it:
 
-4. **Verify .htaccess works** — visit
-   `https://aromen.biz/_config/secrets.php` in a browser. Should return
-   403. If it serves the file, your host doesn't honor `Require all denied` —
-   move `_config/` outside `public_html/` and adjust `require_once` paths
-   in `meter/api/_db.php`.
+   ```
+   /home/<cpaneluser>/
+   ├── _config/                 <- secrets.php (outside the docroot)
+   ├── meter_secrets/           <- optional alternative secrets location
+   ├── meter_sessions/          <- auto-created session store
+   └── ac.aromen.biz/           <- SUBDOMAIN DOCUMENT ROOT
+       ├── api/                 <- ingest.php, login.php, readings.php, ...
+       ├── dashboard/
+       ├── admin/
+       └── bootstrap.php
+   ```
+
+   URLs then come out as `https://ac.aromen.biz/api/ingest.php`,
+   `https://ac.aromen.biz/dashboard/`, and so on.
+
+   Because `api/` now sits **two** levels below the home directory (it was three
+   under the old `public_html/meter/api/`), `api/_db.php` resolves its
+   out-of-docroot paths with `dirname(__DIR__, 2)`. It tries `METER_SECRETS_PATH`,
+   then `~/meter_secrets/secrets.php`, then `~/_config/secrets.php`, and finally
+   `<docroot>/_config/secrets.php`. If you relocate the app to a different depth,
+   those two `dirname(__DIR__, 2)` calls (secrets + session dir) are what to adjust.
+
+4. **Verify secrets aren't served** — with the layout above, `_config/` is above
+   the document root, so `https://ac.aromen.biz/_config/secrets.php` should
+   return 404 (nothing is mapped there). Only if you put `_config/` *inside* the
+   document root does it need the bundled `.htaccess` to return 403 — and if it
+   serves the file instead, your host doesn't honor `Require all denied`, so move
+   `_config/` back above the document root.
 
 5. **First admin login** — visit
-   `https://aromen.biz/meter/bootstrap.php`. The page creates the
+   `https://ac.aromen.biz/bootstrap.php`. The page creates the
    first admin account from a form, then locks itself the moment any
-   admin row exists. Sign in at `/meter/dashboard/login.php` afterwards
+   admin row exists. Sign in at `/dashboard/login.php` afterwards
    and (optionally) delete `bootstrap.php` from the server.
 
 6. **Point a device** — confirm `INGEST_HOST_DEFAULT` (firmware
-   `config.h`) is `https://aromen.biz` or push a different value via
+   `config.h`) is `https://ac.aromen.biz` or push a different value via
    BLE. Power on the ESP32; within ~30 s its heartbeat POST lands and
    the device auto-registers. Then Admin → Devices to bind it to a user.
 
@@ -103,7 +128,7 @@ backend/
 
 | Method | URL | Auth | Purpose |
 |---|---|---|---|
-| POST | `/meter/api/ingest.php` | `X-Device-Token` | data ingest |
+| POST | `/api/ingest.php` | `X-Device-Token` | data ingest |
 
 Request shape: per spec §3.5, plus `Hz` per reading. Response:
 
@@ -122,29 +147,29 @@ Request shape: per spec §3.5, plus `Hz` per reading. Response:
 
 ### Browser / Android app
 
-All require a session cookie (`meter_sess`) from POST `/meter/api/login.php`.
+All require a session cookie (`meter_sess`) from POST `/api/login.php`.
 
 | Method | URL | Auth | Purpose |
 |---|---|---|---|
-| POST | `/meter/api/login.php` | none | `{username,password}` → session |
-| GET/POST | `/meter/api/logout.php` | any | clear session |
-| GET | `/meter/api/devices.php` | session | list devices user can see |
-| GET | `/meter/api/readings.php` | session | data points; query params: `device_id`, `from`, `to`, `aggregate=raw\|hourly\|daily\|monthly` |
-| GET | `/meter/api/relay_state.php` | session | last-reported relay state of a device: `device_id` → `{on, mode, reported_at, interval}` |
-| POST | `/meter/api/admin_users.php` | admin | `action=list\|create\|set_password\|set_admin\|delete` (CSRF) |
-| POST | `/meter/api/admin_devices.php` | admin | `action=list\|bind\|rename\|set_interval\|delete` (CSRF) |
-| POST | `/meter/api/admin_relay.php` | admin | `action=get\|set\|clear` per-device AC-cutoff config (open-hours schedule + `compressor_watts` + `grace_min`), `action=states` live relay state of all devices (CSRF) |
+| POST | `/api/login.php` | none | `{username,password}` → session |
+| GET/POST | `/api/logout.php` | any | clear session |
+| GET | `/api/devices.php` | session | list devices user can see |
+| GET | `/api/readings.php` | session | data points; query params: `device_id`, `from`, `to`, `aggregate=raw\|hourly\|daily\|monthly` |
+| GET | `/api/relay_state.php` | session | last-reported relay state of a device: `device_id` → `{on, mode, reported_at, interval}` |
+| POST | `/api/admin_users.php` | admin | `action=list\|create\|set_password\|set_admin\|delete` (CSRF) |
+| POST | `/api/admin_devices.php` | admin | `action=list\|bind\|rename\|set_interval\|delete` (CSRF) |
+| POST | `/api/admin_relay.php` | admin | `action=get\|set\|clear` per-device AC-cutoff config (open-hours schedule + `compressor_watts` + `grace_min`), `action=states` live relay state of all devices (CSRF) |
 
 ### Pages
 
 | URL | Auth | Purpose |
 |---|---|---|
-| `/meter/dashboard/login.php` | none | sign-in form |
-| `/meter/dashboard/` | session | charts: Today / 24 h / 7 d / 30 d / 12 mo + live relay state |
-| `/meter/dashboard/report.php` | session | day-vs-day comparison: hourly kWh line per day, Weekly (last 7 days incl. today) or Monthly (pick a month) |
-| `/meter/admin/` | admin | overview + recent ingest activity |
-| `/meter/admin/users.php` | admin | user CRUD |
-| `/meter/admin/devices.php` | admin | device binding, per-device interval override, AC-cutoff config (open hours + compressor knobs) + live relay state |
+| `/dashboard/login.php` | none | sign-in form |
+| `/dashboard/` | session | charts: Today / 24 h / 7 d / 30 d / 12 mo + live relay state |
+| `/dashboard/report.php` | session | day-vs-day comparison: hourly kWh line per day, Weekly (last 7 days incl. today) or Monthly (pick a month) |
+| `/admin/` | admin | overview + recent ingest activity |
+| `/admin/users.php` | admin | user CRUD |
+| `/admin/devices.php` | admin | device binding, per-device interval override, AC-cutoff config (open hours + compressor knobs) + live relay state |
 
 ## Aggregations
 

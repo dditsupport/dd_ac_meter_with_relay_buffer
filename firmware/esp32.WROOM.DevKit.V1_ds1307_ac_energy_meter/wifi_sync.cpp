@@ -7,11 +7,15 @@
 #include "rtc.h"
 #include "led.h"
 #include "relay.h"
+#include "ble_service.h"   // pause/resume advertising (disabled on WROOM)
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
 #include "log_serial.h"
 
 // TODO: HMAC payload signing as a future hardening step. For v1, the only auth
@@ -35,6 +39,18 @@ static volatile uint32_t s_scan_version = 0;
 // for its first 15-min log row.
 static uint64_t s_last_successful_post_us = 0;
 
+// Last STA disconnect reason code, captured from the Wi-Fi event so the connect
+// failure log can say *why* it failed. Common codes: 15 =
+// 4WAY_HANDSHAKE_TIMEOUT (wrong password), 2 = AUTH_EXPIRE, 201 = NO_AP_FOUND,
+// 205 = CONNECTION_FAIL. 0 = none captured yet.
+static volatile uint8_t s_last_disc_reason = 0;
+
+static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    s_last_disc_reason = info.wifi_sta_disconnected.reason;
+  }
+}
+
 static void set_wifi_status(WifiStatus st) {
   if (state_lock()) {
     g_state.wifi_status = st;
@@ -55,53 +71,108 @@ static bool try_connect_known() {
 
   storage::WifiCred creds[MAX_WIFI_CREDS];
   size_t n = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
-  if (n == 0) return false;
+  if (n == 0) {
+    LOG_PRINTLN("[wifi] no saved network — nothing to connect to");
+    return false;
+  }
 
-  // Not connected: clear any lingering "connecting" state before the scan and
-  // WiFi.begin() below. On the single-core ESP32-C3 (Wi-Fi sharing the core
-  // with BLE), a prior failed attempt or the auto-reconnect can leave the STA
-  // stuck mid-connect; the IDF then rejects the next set_config with "sta is
-  // connecting, cannot set config", so the fresh credentials never apply and it
-  // never associates. A disconnect forces the set_config to be accepted.
-  WiFi.disconnect(false, false);
-
-  set_wifi_status(WIFI_SCANNING);
-  int found = WiFi.scanNetworks(false, false, false, 200);
-  if (found <= 0) return false;
-
+  // Log the saved network(s) so the serial console shows exactly which SSID the
+  // device is about to try (and how many are stored).
+  LOG_PRINTF("[wifi] %u saved network(s):\n", (unsigned)n);
   for (size_t i = 0; i < n; ++i) {
-    bool match = false;
+    LOG_PRINTF("[wifi]   [%u] \"%s\"\n", (unsigned)i, creds[i].ssid.c_str());
+  }
+
+  // Not connected: clear any lingering "connecting" state before the
+  // WiFi.begin() below, then give the IDF a moment to actually leave the
+  // connecting state. A prior failed attempt can leave the STA stuck
+  // mid-connect; the IDF
+  // then rejects the next set_config with "sta is connecting, cannot set
+  // config", so the fresh credentials never apply and it never associates.
+  // (Background auto-reconnect — the usual source of that stuck state — is
+  // disabled in begin(), so we drive every connect from a clean, idle STA.)
+  WiFi.disconnect(false, false);
+  delay(200);
+
+  // Report the target AP's signal level as this device sees it. Informational
+  // only — we always attempt the connect below, so a scan miss (a weak AP is
+  // occasionally dropped from a scan) or a hidden SSID never blocks it.
+  int found = WiFi.scanNetworks(false, true, false, 300);
+  for (size_t i = 0; i < n; ++i) {
+    bool seen = false;
     for (int j = 0; j < found; ++j) {
       if (WiFi.SSID(j) == creds[i].ssid) {
-        match = true;
+        LOG_PRINTF("[wifi] \"%s\" seen at %d dBm (ch %d)\n",
+                      creds[i].ssid.c_str(), (int)WiFi.RSSI(j), WiFi.channel(j));
+        seen = true;
         break;
       }
     }
-    if (!match) continue;
+    if (!seen) {
+      LOG_PRINTF("[wifi] \"%s\" not seen in scan (hidden or out of range)\n",
+                    creds[i].ssid.c_str());
+    }
+  }
+  if (found > 0) WiFi.scanDelete();
 
+  // Connect by calling WiFi.begin() directly for each stored network — a SINGLE
+  // attempt per cycle. The dual-core WROOM has no BLE/Wi-Fi coexistence problem,
+  // but a single attempt per cycle is still the right shape: the natural
+  // WIFI_SCAN_INTERVAL_SEC cycle provides the retry cadence instead. We also do
+  // NOT gate on the scan above: the IDF connection manager finds the AP's
+  // channel itself, which also covers hidden SSIDs.
+  bool connected = false;
+  for (size_t i = 0; i < n && !connected; ++i) {
     set_wifi_status(WIFI_CONNECTING);
+    // Print the exact SSID and password being used so the credential in NVS can
+    // be verified against the router. (Diagnostic: the password is echoed in
+    // clear text on the serial console.)
+    LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" ...\n",
+                  creds[i].ssid.c_str(), creds[i].password.c_str());
+    s_last_disc_reason = 0;
     WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
+    // Apply TX power immediately after begin(). The WROOM DevKit is externally
+    // regulated and has a proper antenna, so it runs at FULL power by default
+    // (WIFI_TX_POWER_QDBM = 78 = 19.5 dBm) — unlike the Super Mini, which has to
+    // be throttled to keep its weak LDO from sagging mid-TX-burst. The value is
+    // still runtime-settable over BLE, so it can be trimmed if a particular
+    // install proves marginal. This MUST be reapplied after every begin(): the
+    // driver resets TX power on mode changes / reconnect, so a one-time call in
+    // setup() silently drifts back to max on the first reconnect.
+    WiFi.setTxPower((wifi_power_t)storage::wifi_tx_power_qdbm());
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED &&
            millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+      esp_task_wdt_reset();  // this 15 s wait alone can approach the task WDT
       delay(200);
     }
     if (WiFi.status() == WL_CONNECTED) {
       set_wifi_status(WIFI_CONNECTED);
-      LOG_PRINTF("[wifi] connected to %s, ip=%s\n",
-                    creds[i].ssid.c_str(), WiFi.localIP().toString().c_str());
-      return true;
+      LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
+                    creds[i].ssid.c_str(),
+                    WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+      connected = true;
+      break;
     }
+    // Report the terminal status AND the STA disconnect reason so the console
+    // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
+    // AP-not-found (reason 201 = NO_AP_FOUND) from an auth expiry (reason 2,
+    // typically a supply/RF problem). status is the Arduino
+    // wl_status_t (6 = WL_DISCONNECTED).
+    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
+                  creds[i].ssid.c_str(), (int)WiFi.status(),
+                  (int)s_last_disc_reason);
     WiFi.disconnect(true, true);
   }
-  return false;
+
+  return connected;
 }
 
 // Last NTP sync (uint64 monotonic-us) and last good epoch, for rate-limiting.
 static uint64_t s_last_ntp_us = 0;
 static bool     s_ntp_ever_ok = false;
 
-// Last measured DS3231 drift for the hourly drift log: signed seconds where
+// Last measured DS1307 drift for the hourly drift log: signed seconds where
 // + = RTC ahead of true time (running fast), and the NTP epoch at which it was
 // measured (0 = none yet). Sent in the POST; the server logs each distinct
 // measurement so drift can be tracked over time.
@@ -128,6 +199,7 @@ static bool ntp_sync_if_due() {
   configTzTime(TZ_INFO, NTP_SERVER_1, NTP_SERVER_2);
   uint32_t start = millis();
   while (millis() - start < NTP_SYNC_TIMEOUT_MS) {
+    esp_task_wdt_reset();
     time_t now = time(nullptr);
     if (now > 1700000000) {
       time_source::set_wall_clock(now);
@@ -135,7 +207,7 @@ static bool ntp_sync_if_due() {
         g_state.wall_clock_known = true;
         state_unlock();
       }
-      // Mirror NTP-corrected time into the DS3231 so it stays accurate
+      // Mirror NTP-corrected time into the DS1307 so it stays accurate
       // across power loss. Skip the write if the RTC is already within
       // the small drift threshold to limit flash/I2C traffic.
       time_t rtc_now = rtc::read_epoch();
@@ -182,9 +254,18 @@ static uint32_t read_coincell_mv() {
   return (uint32_t)(mv + 0.5f);
 }
 
+// The 16 KB POST request buffer lives here in .bss, NOT on the connectivity
+// task stack. The on-stack copy was the documented stack-overflow culprit (see
+// config.h CONN_TASK_STACK): the 16 KB doc plus the mbedTLS handshake stacking
+// on top of it overflowed and silently corrupted adjacent RAM, faulting only on
+// a marginal link where the handshake stacks deepest. Only the connectivity
+// task calls post_batch(), so this single-owner static needs no locking.
+static StaticJsonDocument<16384> s_post_doc;
+
 static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // Collect up to SYNC_BATCH_SIZE rows with seq <= snapshot_seq.
-  StaticJsonDocument<16384> doc;
+  StaticJsonDocument<16384> &doc = s_post_doc;
+  doc.clear();
   doc["device_id"] = identity::device_id();
   doc["fw_version"] = identity::fw_version();
   doc["sync_wall_time"] = time_source::iso8601_now();
@@ -196,7 +277,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   doc["relay_mode"]    = relay::mode_str();   // "auto" | "on" | "off"
   doc["relay_version"] = relay::version();
 
-  // Hourly DS3231 drift (signed seconds, + = RTC ahead of true time), measured
+  // Hourly DS1307 drift (signed seconds, + = RTC ahead of true time), measured
   // at the last NTP sync. rtc_drift_epoch is the NTP epoch of that measurement;
   // the server dedups on (device_id, epoch) so each hourly sample is logged
   // once even though it rides every 2-minute POST until the next sync.
@@ -259,14 +340,6 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTLN("[wifi] heartbeat POST (empty readings) to refresh config");
   }
 
-  String body;
-  serializeJson(doc, body);
-
-  WiFiClientSecure client;
-  client.setInsecure();  // TODO: cert pinning
-  HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-
   // Compose URL: NVS-configured host (BLE-settable) or the compiled default,
   // then the hardcoded path. Strip any trailing slash from the host so we
   // don't double up.
@@ -274,9 +347,44 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   if (host.isEmpty()) host = INGEST_HOST_DEFAULT;
   while (host.endsWith("/")) host.remove(host.length() - 1);
   String url = host + INGEST_PATH;
+  bool is_https = url.startsWith("https://");
+
+  // Heap guard: a TLS handshake needs a large contiguous allocation for
+  // mbedTLS's buffers. If free heap — or, just as important, the largest free
+  // block — has dropped too low (e.g. after churn on a marginal link), skip
+  // this POST instead of risking an OOM-time hard fault or heap corruption. The
+  // rows stay buffered and ship next cycle once memory recovers. The numbers
+  // are logged so the thresholds can be tuned to what this board actually runs.
+  if (is_https) {
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t largest   = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (free_heap < WIFI_MIN_FREE_HEAP_BYTES ||
+        largest   < WIFI_MIN_LARGEST_BLOCK_BYTES) {
+      LOG_PRINTF("[wifi] low heap — deferring POST (free=%u largest=%u)\n",
+                    (unsigned)free_heap, (unsigned)largest);
+      return false;
+    }
+  }
+
+  String body;
+  serializeJson(doc, body);
+
+  WiFiClientSecure client;
+  client.setInsecure();  // TODO: cert pinning
+  // Cap the TLS handshake so a stall on a marginal link can't block this task
+  // past the task watchdog (the cause of the recurring `task_wdt: conn` reboot).
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+  HTTPClient http;
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);  // bound TCP connect too
+  http.setTimeout(HTTP_TIMEOUT_MS);         // bound the response read
+
+  // Feed the task WDT right before the blocking POST: even a bounded handshake
+  // + connect + read can sum to several seconds, and this is the longest single
+  // blocking span in the connectivity task's loop.
+  esp_task_wdt_reset();
 
   bool ok;
-  if (url.startsWith("https://")) {
+  if (is_https) {
     ok = http.begin(client, url);
   } else {
     ok = http.begin(url);  // plain HTTP for bench stub
@@ -295,6 +403,12 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   String resp = http.getString();
   http.end();
   s_radio_busy = false;
+
+  // Periodic heap visibility: one line per POST so a slow leak or fragmentation
+  // trend is obvious in the log well before it reaches the guard threshold.
+  LOG_PRINTF("[wifi] heap free=%u largest=%u\n",
+                (unsigned)esp_get_free_heap_size(),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
   if (code != 200) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
@@ -343,7 +457,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     relay::apply(rv, sched_json, cw, gm);
   }
 
-  // Server-time fallback: if neither the DS3231 nor NTP gave us a wall
+  // Server-time fallback: if neither the DS1307 nor NTP gave us a wall
   // clock, seed time_source from the server's response. The server
   // returns server_time as an ISO 8601 string (MilesWeb is in UTC by
   // default; APP_TIMEZONE in secrets.php can change that).
@@ -356,7 +470,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
         state_unlock();
       }
       // Persist into the RTC if it's present (even if it had been marked
-      // unavailable due to lost-power; this clears the OSF).
+      // unavailable due to lost-power; this restarts the oscillator).
       rtc::write_epoch(srv_epoch);
       LOG_PRINTF("[wifi] wall clock seeded from server_time: %s\n", srv_time);
     }
@@ -375,11 +489,21 @@ uint32_t seconds_since_last_successful_post() {
 
 void begin() {
   WiFi.mode(WIFI_STA);
-  // Stay associated continuously (the monitor is mains-powered). The STA
-  // auto-rejoins if the AP blips, so the device is reachable between sync
-  // cycles and the app's "Wi-Fi: Connected" status is accurate.
-  WiFi.setAutoReconnect(true);
+  // Drive every (re)connect ourselves from run_cycle()/try_connect_known()
+  // instead of letting the IDF auto-reconnect in the background. On the
+  // the auto-reconnect handler fires a fresh esp_wifi_connect()
+  // the instant an attempt fails and races our own WiFi.disconnect()/
+  // WiFi.begin(), which makes esp_wifi_set_config() reject the new credentials
+  // with "sta is connecting, cannot set config" (seen in the serial log) — so
+  // the SSID/password never apply and the device never associates. With
+  // auto-reconnect off, each connect starts from a clean, idle STA. We already
+  // reconnect on every 2-minute cycle (and immediately on a sync request), and
+  // try_connect_known() early-returns while the link is up, so continuous
+  // reachability is preserved without the racing background reconnector.
+  WiFi.setAutoReconnect(false);
   WiFi.persistent(false);
+  // Capture STA disconnect reason codes for the connect-failure diagnostics.
+  WiFi.onEvent(on_wifi_event);
 }
 
 bool is_radio_busy() { return s_radio_busy; }
@@ -441,55 +565,71 @@ void run_scan() {
 }
 
 bool run_cycle() {
-  if (!try_connect_known()) {
+  // Optionally quiet BLE for the cycle. On the dual-core WROOM this is DISABLED
+  // (WIFI_PAUSE_BLE_DURING_SYNC = 0): BLE and Wi-Fi coexist fine, so advertising
+  // keeps running throughout the sync and the app stays connectable. The hooks
+  // are retained so the guard can be flipped on if a board ever needs it.
+#if WIFI_PAUSE_BLE_DURING_SYNC
+  ble_service::pause_advertising();
+  delay(20);   // let the BLE controller settle off-air before we hit the radio
+#endif
+
+  bool result = false;
+  if (try_connect_known()) {
+    ntp_sync_if_due();  // hourly resync; OK to proceed even if it fails
+
+    uint64_t snapshot = storage::snapshot_max_seq();
+    // Loop until all rows up to snapshot have been acked or a POST fails.
+    while (true) {
+      esp_task_wdt_reset();  // multi-batch drains can span several POSTs
+      uint64_t acked = 0;
+      if (!post_batch(snapshot, acked)) break;
+      if (acked > 0) {
+        storage::truncate_up_to(acked);
+        // Prune boot_history: any entry older than the oldest remaining row's
+        // boot_id is no longer needed (server has it, device won't re-send).
+        // If /log.csv is now empty, prune everything older than the current
+        // boot so boot_history collapses to just {current_boot}.
+        uint32_t min_keep = storage::boot_id();
+        storage::stream_rows_up_to(UINT64_MAX, [&](const storage::RowFields &r) -> bool {
+          if (r.boot_id < min_keep) min_keep = r.boot_id;
+          return true;
+        });
+        storage::prune_boot_history_below(min_keep);
+
+        if (state_lock()) {
+          g_state.unsynced_count = storage::current_unsynced_count();
+          state_unlock();
+        }
+      }
+      // If nothing left to send for this snapshot, exit.
+      if (storage::current_unsynced_count() == 0) break;
+      // If we still have rows with seq <= snapshot (multi-batch case), continue.
+      bool more = false;
+      storage::stream_rows_up_to(snapshot, [&](const storage::RowFields &) {
+        more = true;
+        return false;
+      });
+      if (!more) break;
+    }
+
+    storage::set_last_sync_at((uint32_t)time(nullptr));
+    // Stay connected between cycles — do NOT disconnect here. The next cycle's
+    // try_connect_known() early-returns on WL_CONNECTED, so we skip the
+    // reconnect (no log spam, no IDF re-association noise) and the device
+    // stays reachable / shows "Connected" in the app.
+    set_wifi_status(WIFI_CONNECTED);
+    result = true;
+  } else {
     WiFi.disconnect(true, true);
     set_wifi_status(WIFI_IDLE);
-    return false;
+    result = false;
   }
 
-  ntp_sync_if_due();  // hourly resync; OK to proceed even if it fails
-
-  uint64_t snapshot = storage::snapshot_max_seq();
-  // Loop until all rows up to snapshot have been acked or a POST fails.
-  while (true) {
-    uint64_t acked = 0;
-    if (!post_batch(snapshot, acked)) break;
-    if (acked > 0) {
-      storage::truncate_up_to(acked);
-      // Prune boot_history: any entry older than the oldest remaining row's
-      // boot_id is no longer needed (server has it, device won't re-send).
-      // If /log.csv is now empty, prune everything older than the current
-      // boot so boot_history collapses to just {current_boot}.
-      uint32_t min_keep = storage::boot_id();
-      storage::stream_rows_up_to(UINT64_MAX, [&](const storage::RowFields &r) -> bool {
-        if (r.boot_id < min_keep) min_keep = r.boot_id;
-        return true;
-      });
-      storage::prune_boot_history_below(min_keep);
-
-      if (state_lock()) {
-        g_state.unsynced_count = storage::current_unsynced_count();
-        state_unlock();
-      }
-    }
-    // If nothing left to send for this snapshot, exit.
-    if (storage::current_unsynced_count() == 0) break;
-    // If we still have rows with seq <= snapshot (multi-batch case), continue.
-    bool more = false;
-    storage::stream_rows_up_to(snapshot, [&](const storage::RowFields &) {
-      more = true;
-      return false;
-    });
-    if (!more) break;
-  }
-
-  storage::set_last_sync_at((uint32_t)time(nullptr));
-  // Stay connected between cycles — do NOT disconnect here. The next cycle's
-  // try_connect_known() early-returns on WL_CONNECTED, so we skip the
-  // reconnect (no log spam, no IDF re-association noise) and the device
-  // stays reachable / shows "Connected" in the app.
-  set_wifi_status(WIFI_CONNECTED);
-  return true;
+#if WIFI_PAUSE_BLE_DURING_SYNC
+  ble_service::resume_advertising();
+#endif
+  return result;
 }
 
 }  // namespace wifi_sync

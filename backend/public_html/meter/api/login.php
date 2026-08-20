@@ -1,5 +1,5 @@
 <?php
-// POST /meter/api/login.php { username, password } -> session cookie.
+// POST /api/login.php { username, password } -> session cookie.
 // Form-encoded or JSON both accepted.
 
 declare(strict_types=1);

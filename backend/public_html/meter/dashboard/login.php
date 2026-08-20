@@ -17,7 +17,7 @@ function try_password_login(string $u, #[\SensitiveParameter] string $p): ?strin
     $row = $st->fetch();
     if ($row && password_verify($p, $row['password_hash'])) {
         login_user((int)$row['id']);
-        header('Location: ' . (!empty($row['is_admin']) ? '/meter/admin/' : '/meter/dashboard/'));
+        header('Location: ' . (!empty($row['is_admin']) ? '/admin/' : '/dashboard/'));
         exit;
     }
     usleep(200_000);
@@ -29,7 +29,7 @@ function try_password_login(string $u, #[\SensitiveParameter] string $p): ?strin
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — sign in</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 </head><body class="auth">
 <form method="post" class="card login">
   <h1>AC Energy Meter</h1>

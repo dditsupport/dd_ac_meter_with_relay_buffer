@@ -20,15 +20,15 @@ $recent = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — admin</title>
-<link rel="stylesheet" href="/meter/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
 </head><body>
 <header class="topbar">
   <div class="brand">AC Energy Meter — admin</div>
   <div class="user">
-    <a href="/meter/dashboard/">dashboard</a>
-    &middot; <a href="/meter/admin/users.php">users</a>
-    &middot; <a href="/meter/admin/devices.php">devices</a>
-    &middot; <a href="/meter/api/logout.php">sign out</a>
+    <a href="/dashboard/">dashboard</a>
+    &middot; <a href="/admin/users.php">users</a>
+    &middot; <a href="/admin/devices.php">devices</a>
+    &middot; <a href="/api/logout.php">sign out</a>
   </div>
 </header>
 <main class="container">

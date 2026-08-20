@@ -34,7 +34,7 @@ class IngestHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_POST(self):
-        if self.path.rstrip("/") not in ("/ingest", "/api/meter/ingest.php"):
+        if self.path.rstrip("/") not in ("/ingest", "/api/ingest.php"):
             self._send(404, {"ok": False, "error": "not_found"})
             return
 

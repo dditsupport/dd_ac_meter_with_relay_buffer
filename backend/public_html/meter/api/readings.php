@@ -1,5 +1,5 @@
 <?php
-// GET /meter/api/readings.php?device_id=X&from=ISO&to=ISO&aggregate=raw|hourly|daily|monthly
+// GET /api/readings.php?device_id=X&from=ISO&to=ISO&aggregate=raw|hourly|daily|monthly
 // Auth: session (browser/app). Returns JSON.
 //
 // aggregate=daily / monthly compute generated kWh as MAX(energy_wh)-MIN(energy_wh)

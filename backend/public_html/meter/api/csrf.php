@@ -1,5 +1,5 @@
 <?php
-// GET /meter/api/csrf.php
+// GET /api/csrf.php
 // Returns a CSRF token for the current logged-in session. Used by the
 // Android app to refresh its X-CSRF header after a cold start when the
 // session cookie is still valid but the in-memory token was lost.

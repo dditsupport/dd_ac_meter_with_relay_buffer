@@ -69,6 +69,7 @@ static NimBLECharacteristic *s_char_wifi_scan = nullptr;
 static NimBLECharacteristic *s_char_server_cfg = nullptr;
 static NimBLECharacteristic *s_char_relay = nullptr;
 static NimBLECharacteristic *s_char_pzem_reset = nullptr;
+static NimBLECharacteristic *s_char_factory_reset = nullptr;
 static NimBLECharacteristic *s_char_auth_chal = nullptr;
 static NimBLECharacteristic *s_char_auth_resp = nullptr;
 static String s_last_relay_json = "";
@@ -77,6 +78,7 @@ static WifiStatus s_last_pushed_wifi_status = WIFI_IDLE;
 
 static volatile bool s_client_connected = false;
 static volatile bool s_streaming_active = false;
+static volatile bool s_shutdown = false;   // true once shutdown() deinit'd BLE
 static volatile bool s_stream_requested = false;
 static uint16_t s_mtu = 23;  // default until negotiated
 
@@ -229,11 +231,11 @@ class SetTimeCallbacks : public NimBLECharacteristicCallbacks {
         g_state.wall_clock_known = true;
         state_unlock();
       }
-      // Phone time is less authoritative than NTP, but if the DS3231 lost
+      // Phone time is less authoritative than NTP, but if the DS1307 lost
       // power (or isn't present), seeding it from the phone is still better
-      // than nothing. RTClib's adjust() clears the OSF.
+      // than nothing. RTClib's adjust() restarts the oscillator.
       if (!rtc::available() && rtc::write_epoch(epoch)) {
-        LOG_PRINTLN("[ble] DS3231 seeded from phone time");
+        LOG_PRINTLN("[ble] DS1307 seeded from phone time");
       }
       LOG_PRINTF("[ble] wall clock set to %ld\n", (long)epoch);
     }
@@ -280,7 +282,7 @@ class AckCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// Server Config: write JSON {"host":"https://aromen.biz"} to update the
+// Server Config: write JSON {"host":"https://ac.aromen.biz"} to update the
 // backend hostname. Path stays hardcoded in INGEST_PATH. Response is
 // surfaced via the next Device Info read (ingest_host field).
 class ServerCfgCallbacks : public NimBLECharacteristicCallbacks {
@@ -363,6 +365,30 @@ class PzemResetCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+// Factory reset: wipe NVS + buffered readings and reboot into a fresh device.
+// Destructive, so it is gated on BLE auth AND an explicit confirmation payload:
+// {"action":"factory_reset"}. The actual wipe + reboot is deferred to the main
+// loop (storage::consume_factory_reset_request) so it never runs inside this
+// NimBLE callback.
+class FactoryResetCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    if (!is_authed(info)) return;
+    std::string v = c->getValue();
+    StaticJsonDocument<96> doc;
+    if (deserializeJson(doc, v)) {
+      LOG_PRINTF("[ble] factory-reset bad json: %s\n", v.c_str());
+      return;
+    }
+    String action = (const char *)(doc["action"] | "");
+    if (action != "factory_reset") {
+      LOG_PRINTF("[ble] factory-reset ignored (action=%s)\n", action.c_str());
+      return;
+    }
+    storage::request_factory_reset();
+    LOG_PRINTLN("[ble] factory reset requested by app — device will wipe and reboot");
+  }
+};
+
 class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
     if (!is_authed(info)) return;
@@ -386,6 +412,23 @@ class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
       // pretending we already broadcast SCANNING from the periodic path.
       s_last_pushed_wifi_status = WIFI_SCANNING;
       LOG_PRINTLN("[ble] scan requested");
+      return;
+    }
+
+    // Command shape: {"action":"set_tx_power","dbm":13}  (dbm may be fractional,
+    // e.g. 8.5). Stored in quarter-dBm units and applied to the radio now and on
+    // every subsequent connect.
+    if (action == "set_tx_power") {
+      float dbm = doc["dbm"] | 0.0f;
+      int qdbm = (int)(dbm * 4.0f + (dbm >= 0 ? 0.5f : -0.5f));
+      if (storage::set_wifi_tx_power_qdbm(qdbm)) {
+        WiFi.setTxPower((wifi_power_t)qdbm);   // apply immediately; also on next connect
+        LOG_PRINTF("[ble] tx power set to %.2f dBm (qdbm=%d)\n", (double)dbm, qdbm);
+        s_wifi_status_json = "";  // force tick() to rebuild + push the new value
+      } else {
+        LOG_PRINTF("[ble] tx power rejected: %.2f dBm (qdbm=%d, valid 2..21 dBm)\n",
+                      (double)dbm, qdbm);
+      }
       return;
     }
 
@@ -592,6 +635,11 @@ void begin() {
       BLE_UUID_PZEM_RESET, NIMBLE_PROPERTY::WRITE);
   s_char_pzem_reset->setCallbacks(new PzemResetCallbacks());
 
+  // Write-only "factory reset" command (auth + confirmation gated).
+  s_char_factory_reset = svc->createCharacteristic(
+      BLE_UUID_FACTORY_RESET, NIMBLE_PROPERTY::WRITE);
+  s_char_factory_reset->setCallbacks(new FactoryResetCallbacks());
+
   svc->start();
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
@@ -605,6 +653,7 @@ void begin() {
 }
 
 void tick() {
+  if (s_shutdown) return;   // BLE de-initialized at the Wi-Fi handoff
   // Refresh dynamic READ values.
   if (s_char_info) s_char_info->setValue(to_std(build_device_info_json()));
   if (s_char_boots) s_char_boots->setValue(to_std(build_boot_history_json()));
@@ -616,12 +665,22 @@ void tick() {
   // app show "Idle" for a device that's actually online. When connected we
   // include the SSID and IP so the app can display them.
   {
+    // Saved SSID + current TX power ride the status JSON regardless of
+    // connection state, so the app's Wi-Fi screen can show what's configured
+    // even while the device is offline. The password is never exposed.
+    storage::WifiCred creds[MAX_WIFI_CREDS];
+    size_t nc = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
+    String saved_ssid = nc > 0 ? creds[0].ssid : String();
+    float tx_dbm = storage::wifi_tx_power_qdbm() / 4.0f;
+
     String out;
     if (WiFi.isConnected()) {
-      StaticJsonDocument<192> doc;
+      StaticJsonDocument<256> doc;
       doc["status"] = "connected";
       doc["ssid"]   = WiFi.SSID();
       doc["ip"]     = WiFi.localIP().toString();
+      doc["saved_ssid"]   = saved_ssid;
+      doc["tx_power_dbm"] = tx_dbm;
       serializeJson(doc, out);
     } else {
       // Not associated — surface the transient state so the user still sees
@@ -635,8 +694,10 @@ void tick() {
           default:              st = "disconnected"; break;
         }
       }
-      StaticJsonDocument<96> doc;
+      StaticJsonDocument<192> doc;
       doc["status"] = st;
+      doc["saved_ssid"]   = saved_ssid;
+      doc["tx_power_dbm"] = tx_dbm;
       serializeJson(doc, out);
     }
     if (out != s_wifi_status_json) {
@@ -674,10 +735,39 @@ void tick() {
 
 bool is_streaming() { return s_streaming_active; }
 
+bool is_connected() { return !s_shutdown && s_client_connected; }
+
 bool is_alive() {
+  if (s_shutdown) return true;   // intentionally off at the handoff — not wedged
   if (s_client_connected) return true;
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   return adv != nullptr && adv->isAdvertising();
+}
+
+void shutdown() {
+  if (s_shutdown) return;
+  s_shutdown = true;
+  s_server = nullptr;   // freed by deinit; null it so pause/resume no-op
+  // deinit(true) stops advertising/connections, tears down the host + BT
+  // controller, and frees the radio for Wi-Fi.
+  NimBLEDevice::deinit(true);
+  set_ble_status(BLE_OFF);
+  LOG_PRINTLN("[ble] de-initialized (Wi-Fi has the radio now)");
+}
+
+void pause_advertising() {
+  if (s_server == nullptr) return;   // begin() not run yet
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv != nullptr && adv->isAdvertising()) adv->stop();
+}
+
+void resume_advertising() {
+  if (s_server == nullptr) return;
+  // A connected client already keeps BLE alive, and advertising auto-restarts
+  // on that client's disconnect, so don't force it here.
+  if (s_client_connected) return;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv != nullptr && !adv->isAdvertising()) adv->start();
 }
 
 }  // namespace ble_service

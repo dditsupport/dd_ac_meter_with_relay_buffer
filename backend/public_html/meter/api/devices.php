@@ -1,5 +1,5 @@
 <?php
-// GET /meter/api/devices.php
+// GET /api/devices.php
 // Returns the devices the current user is allowed to see, plus their latest meta.
 // Admins see every device with its owner.
 

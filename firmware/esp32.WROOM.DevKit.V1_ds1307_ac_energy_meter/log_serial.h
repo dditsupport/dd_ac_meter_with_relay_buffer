@@ -2,12 +2,12 @@
 
 // Thread-safe Serial logging.
 //
-// Why: Serial.printf() on ESP32 is NOT atomic. With the sampling task on
-// core 0 and the connectivity task on core 1 both writing concurrently,
-// the UART byte stream interleaves and high-bit bytes of one printf land
-// in the middle of another, producing the classic "����������" garbage
-// seen mid-line on the serial terminal. Wrapping every printf in a mutex
-// serialises writes per line.
+// Why: Serial.printf() on ESP32 is NOT atomic. The sampling and connectivity
+// tasks preempt each other on the C3's single core, so without serialisation
+// the byte stream of one printf interleaves with another and high-bit bytes
+// land mid-line, producing the classic "����������" garbage seen on the
+// serial terminal. Wrapping every printf in a mutex serialises writes per
+// line.
 //
 // Use LOG_PRINTF / LOG_PRINTLN exactly like Serial.printf / Serial.println.
 // Call log_init() once from setup() AFTER Serial.begin().

@@ -10,7 +10,7 @@
 
 // ---------- Backend ----------
 // The ingest endpoint URL is split into two parts:
-//   INGEST_HOST_DEFAULT - scheme + host + optional port, e.g. "https://aromen.biz"
+//   INGEST_HOST_DEFAULT - scheme + host + optional port, e.g. "https://ac.aromen.biz"
 //                         Stored in NVS and configurable at runtime via BLE
 //                         (Server Config characteristic). This default is only
 //                         used if NVS has not been written.
@@ -20,8 +20,8 @@
 //
 // To switch backend hostnames at runtime, write {"host":"https://newdomain.com"}
 // from the companion app — no reflash needed.
-#define INGEST_HOST_DEFAULT     "https://aromen.biz"
-#define INGEST_PATH             "/meter/api/ingest.php"
+#define INGEST_HOST_DEFAULT     "https://ac.aromen.biz"
+#define INGEST_PATH             "/api/ingest.php"
 #define DEVICE_TOKEN            "token"
 
 // ---------- Wi-Fi (optional bench-test fallback) ----------
@@ -46,12 +46,61 @@
 #define LOG_INTERVAL_SEC_DEFAULT 300
 #define LOG_INTERVAL_SEC_MIN     60
 #define LOG_INTERVAL_SEC_MAX     86400
-#define DISPLAY_REFRESH_MS       1000     // 1 Hz OLED refresh & PZEM sample
+#define SAMPLE_INTERVAL_MS       1000     // 1 Hz PZEM sample cadence
 #define WIFI_SCAN_INTERVAL_SEC  120       // 2 minutes between Wi-Fi cycles
 #define NTP_SYNC_TIMEOUT_MS     5000
 #define NTP_RESYNC_INTERVAL_SEC 3600      // re-hit the NTP server at most every 1 h
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define HTTP_TIMEOUT_MS         10000
+// TLS handshake cap (seconds). WiFiClientSecure defaults to 120 s, so on a
+// marginal link a stalled handshake blocks the connectivity task far past the
+// ~30 s task watchdog, which then aborts and reboots the chip (seen on the
+// Super Mini as a recurring `task_wdt: conn` panic). Capping it well under the
+// WDT lets a bad handshake fail fast so post_batch() just retries next cycle.
+#define TLS_HANDSHAKE_TIMEOUT_S 12
+
+// Wi-Fi TX power, in quarter-dBm units — the ESP32 wifi_power_t enum values are
+// exactly dBm*4 (19.5 dBm = 78, 13 dBm = 52, 11 dBm = 44). Kept as a plain
+// number (NOT the WIFI_POWER_* enum) so files that don't include WiFi.h (e.g.
+// storage.cpp) can use it as the NVS fallback.
+//
+// The WROOM DevKit is externally regulated and has a proper antenna, so it runs
+// at FULL power — no throttling needed. (The Super Mini has to be capped to ~11
+// dBm because its weak onboard LDO sags mid-TX-burst.) This is only the
+// fallback; the live value lives in NVS and is settable from the app.
+#define WIFI_TX_POWER_QDBM      78   // 19.5 dBm — full power
+
+// ---------- BLE / Wi-Fi radio sharing (WROOM: none needed) ----------
+// The dual-core WROOM has no BLE/Wi-Fi coexistence problem, so BOTH of the
+// single-radio workarounds used on the ESP32-C3 Super Mini are DISABLED here:
+//
+//   WIFI_PAUSE_BLE_DURING_SYNC 0 — do NOT stop advertising during a sync; BLE
+//     stays connectable throughout, so the app can talk to the device at any
+//     time (on the C3 this had to be 1 to avoid a coexistence crash).
+//   BLE_CONFIG_WINDOW_SEC      0 — no BLE->Wi-Fi handoff; BLE runs for the
+//     WHOLE session alongside Wi-Fi instead of only a 2-minute config window
+//     followed by ble_service::shutdown() (on the C3 this had to be 120).
+//
+// Set them non-zero only if a specific board turns out to need throttling.
+#define WIFI_PAUSE_BLE_DURING_SYNC 0
+#define BLE_CONFIG_WINDOW_SEC      0
+
+// ---------- Heap guard (TLS POST) ----------
+// A TLS handshake needs a large contiguous allocation for mbedTLS's buffers. If
+// free memory — or the largest free block — has dropped too low, post_batch()
+// defers the POST (rows stay buffered, retried next cycle) rather than risking
+// an OOM-time hard fault. Both numbers are logged after every POST so they can
+// be tuned to what this board actually runs at.
+#define WIFI_MIN_FREE_HEAP_BYTES     45000
+#define WIFI_MIN_LARGEST_BLOCK_BYTES 40000
+
+// ---------- ROM / panic log visibility ----------
+// log_serial::init() can silence ets_printf / ROM putchar output to keep the
+// console clean of the Wi-Fi PHY's high-bit garbage. But that same path carries
+// the panic reason line ("CORRUPT HEAP: ...", "assert failed ...", "Guru
+// Meditation ..."), so silencing it hides *why* a crash happened. 1 = quiet
+// production console; set to 0 while diagnosing a crash to see the reason.
+#define ROM_LOG_QUIET           1
 
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
@@ -82,8 +131,8 @@
 
 // ---------- Demo mode ----------
 // Set to 1 to bypass the real PZEM and feed the rest of the firmware
-// synthetic (but plausible) readings. Lets you bench-test the OLED,
-// LittleFS logging, Wi-Fi sync, and BLE characteristics without having
+// synthetic (but plausible) readings. Lets you bench-test the LittleFS
+// logging, Wi-Fi sync, and BLE characteristics without having
 // the PZEM physically wired. Leave at 0 for production / real measurements.
 #define PZEM_DEMO_MODE          0
 
@@ -103,24 +152,28 @@
 #define STUCK_BLE_REBOOT_SEC    43200     // 12 h
 
 // ---------- Pin map (ESP32 DevKit V1) ----------
+// PIN RULE: use only the pins broken out on the LEFT and RIGHT headers. Never
+// use GPIO 6..11 — those are the bottom-row pins wired to the module's internal
+// SPI flash (CLK/CMD/SD0..SD3). Touching them bricks flash access and the chip
+// won't boot. On the 38-pin DevKit they are physically present on the bottom
+// row; treat that whole row as reserved.
+//
+// Every pin below is on a side header and outside 6..11. Strapping pins in use
+// are noted individually (GPIO 0, 2, 15) — each is safe in its wiring here.
 #define PIN_PZEM_RX             16        // ESP32 RX2 <- PZEM TX
 #define PIN_PZEM_TX             17        // ESP32 TX2 -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_OLED_SCK            23
-#define PIN_OLED_MOSI           22
-#define PIN_OLED_RST            21
-#define PIN_OLED_DC             19
-#define PIN_OLED_CS             18        // moved off GPIO 5 (strapping pin)
-
-#define PIN_I2C_SDA             4         // DS3231 SDA
-#define PIN_I2C_SCL             15        // DS3231 SCL — GPIO 15 is a strapping pin but idles HIGH (I2C pull-ups), so boot is unaffected
-#define I2C_FREQ_HZ             400000    // DS3231 supports up to 400 kHz
+#define PIN_I2C_SDA             4         // DS1307 SDA
+#define PIN_I2C_SCL             15        // DS1307 SCL — GPIO 15 is a strapping pin but idles HIGH (I2C pull-ups), so boot is unaffected
+// The DS1307 is a STANDARD-MODE part: 100 kHz max. (The DS3231 this build used
+// to carry tolerated 400 kHz; running the DS1307 that fast is out of spec.)
+#define I2C_FREQ_HZ             100000    // DS1307 is a standard-mode (100 kHz) part
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 
 // ---------- Status LED ----------
 // Wi-Fi activity indicator. GPIO 2 is the on-board LED on most ESP32 dev
-// boards (it was freed when OLED_RST moved to GPIO 19). Set ACTIVE_HIGH to 0
+// boards. Set ACTIVE_HIGH to 0
 // if your board's LED is wired active-low.
 #define PIN_STATUS_LED          2
 #define LED_ACTIVE_HIGH         1
@@ -129,7 +182,7 @@
 #define LED_TX_PULSE_MS         800       // how long the TX flicker lasts per POST
 
 // ---------- Coin-cell (RTC backup) voltage sense ----------
-// Averaged ADC read of the CR2032 coin cell that backs up the DS3231 RTC,
+// Averaged ADC read of the CR2032 coin cell that backs up the DS1307 RTC,
 // reported on each ingest POST as `coincell_mv` (millivolts) alongside
 // wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
 // lost. GPIO35 is an input-only ADC1 channel (ADC1_CH7) on the WROOM DevKit V1
@@ -201,6 +254,12 @@
 // install). Requires BLE auth and an explicit confirmation payload.
 #define BLE_UUID_PZEM_RESET     "b7e6a1d4-3c2f-4e88-9a5b-6d0f21c8e743"
 
+// Write-only command to factory-reset the device: wipe the entire NVS partition
+// (Wi-Fi creds, backend host, log interval, boot/seq counters, relay schedule,
+// boot-loop history) and clear the buffered readings, then reboot so it comes up
+// as a fresh, unprovisioned device. Requires BLE auth and a confirmation payload.
+#define BLE_UUID_FACTORY_RESET  "c1a9f2e5-4b6d-4c8a-9e21-7f3b0d5a8c64"
+
 // ---------- BLE access auth (HMAC-SHA256 challenge/response) ----------
 // The app must prove it knows BLE_PSK before any other characteristic is
 // usable, which keeps generic BLE tools (e.g. nRF Connect) out. The key is
@@ -219,9 +278,9 @@
 
 // ---------- Task config ----------
 #define SAMPLING_TASK_STACK     6144
-// Must hold post_batch()'s 16 KB StaticJsonDocument AND the mbedTLS handshake
-// on top of it; 12 KB overflowed (the 16 KB doc alone exceeds it) and silently
-// corrupted adjacent RAM. 32 KB gives the doc + TLS + call frames real room.
+// post_batch()'s 16 KB StaticJsonDocument now lives in .bss (file-scope static),
+// not on this stack, so the task only has to hold the mbedTLS handshake + call
+// frames. 32 KB stays comfortably above that with margin.
 #define CONN_TASK_STACK         32768
 #define SAMPLING_TASK_PRIO      3
 #define CONN_TASK_PRIO          2

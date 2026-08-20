@@ -61,7 +61,7 @@ void clear_wifi_creds();
 void set_last_sync_at(uint32_t epoch);
 uint32_t last_sync_at();
 
-// Backend host (scheme + host + optional port, e.g. "https://aromen.biz").
+// Backend host (scheme + host + optional port, e.g. "https://ac.aromen.biz").
 // Empty string means "use INGEST_HOST_DEFAULT compiled into config.h".
 // Updated at runtime via BLE (Server Config characteristic).
 String ingest_host();

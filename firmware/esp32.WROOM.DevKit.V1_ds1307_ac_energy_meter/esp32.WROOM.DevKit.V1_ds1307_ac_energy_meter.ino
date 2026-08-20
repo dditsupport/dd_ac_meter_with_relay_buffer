@@ -1,7 +1,7 @@
 // AC Energy Meter — ESP32 firmware (v1.0.0)
 //
 // Sketch entry point. Sets up the brownout detector, mounts storage, then
-// spawns two pinned FreeRTOS tasks: SamplingTask on core 0 (PZEM + OLED) and
+// spawns two pinned FreeRTOS tasks: SamplingTask on core 0 (PZEM) and
 // ConnectivityTask on core 1 (BLE always, Wi-Fi periodic). All shared mutable
 // state lives in g_state, guarded by g_state_mutex.
 //
@@ -12,7 +12,6 @@
 #include "identity.h"
 #include "time_source.h"
 #include "pzem.h"
-#include "display.h"
 #include "storage.h"
 #include "health.h"
 #include "wifi_sync.h"
@@ -48,7 +47,11 @@ void setup() {
 
   Serial.begin(115200);
   log_serial::init();
-  delay(50);
+  // Give the serial monitor time to (re)attach after reset before the first
+  // prints, so the boot banner isn't lost. The WROOM DevKit has a real USB-UART
+  // bridge (so unlike the Super Mini's native USB-CDC it needs no enumeration
+  // window), but the reattach margin is still worth having.
+  delay(1000);
   LOG_PRINTLN();
   LOG_PRINTLN("=== AC Energy Meter boot ===");
 
@@ -58,13 +61,10 @@ void setup() {
     while (true) delay(1000);
   }
 
-  display::begin();
-  display::splash("AC Energy Meter", "booting...");
-
   time_source::begin();
   health::begin();
   if (!storage::begin()) {
-    display::splash("STORAGE FAIL", "check flash");
+    LOG_PRINTLN("[fatal] storage init failed; check flash");
     while (true) delay(1000);
   }
   pzem::begin();
@@ -72,8 +72,9 @@ void setup() {
   // BOOT button for the fresh-install energy reset (long-press in loop()).
   pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
-  // Seed wall clock from the DS3231 if it's healthy. This lets the OLED show
-  // "Today:" immediately at boot instead of "Session:" until NTP or BLE.
+  // Seed wall clock from the DS1307 if it's healthy. This lets "Today:" energy
+  // totals track from boot instead of only counting the current session until
+  // NTP or BLE sets the clock.
   if (rtc::begin()) {
     time_t epoch = rtc::read_epoch();
     if (epoch > 0 && time_source::set_wall_clock(epoch)) {
@@ -176,6 +177,16 @@ void loop() {
     boot_reset_fired    = false;
   }
 
+  // Factory reset requested over BLE (Android app). Done here in the main loop,
+  // outside the NimBLE callback, so the NVS erase + reboot run from a safe
+  // context. This wipes the device to a fresh state and restarts it.
+  if (storage::consume_factory_reset_request()) {
+    LOG_PRINTLN("[reset] factory reset requested — wiping NVS + log, rebooting");
+    storage::factory_reset();
+    delay(300);        // let the log line flush before the restart
+    esp_restart();
+  }
+
   led::tick();
   relay::tick();
   delay(50);
@@ -268,7 +279,6 @@ static void sampling_task(void *) {
     if (reset_from_button || reset_from_ble) {
       if (pzem::reset_energy()) {
         session_anchor_wh = -1.0f;   // re-anchor session; today re-anchors on the drop
-        display::splash("Energy reset", "meter = 0");
         LOG_PRINTF("[reset] PZEM energy register zeroed (%s)\n",
                       reset_from_ble ? "BLE app" : "BOOT button");
       } else {
@@ -351,9 +361,6 @@ static void sampling_task(void *) {
     // Feed the relay's compressor-aware cutoff with the latest wattage.
     relay::update_power(sample.power, ok);
 
-    // Render OLED from a snapshot (no I/O under lock).
-    display::tick();
-
     // Periodic log row. Cadence is server-configurable (storage::log_interval_sec)
     // and falls back to LOG_INTERVAL_SEC_DEFAULT (config.h) on a fresh device.
     uint32_t log_period_sec = storage::log_interval_sec();
@@ -393,43 +400,74 @@ static void sampling_task(void *) {
       clean_uptime_marked = true;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(DISPLAY_REFRESH_MS));
+    vTaskDelay(pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
   }
 }
 
 // ---- ConnectivityTask (core 1) ---------------------------------------------
 static void connectivity_task(void *) {
   esp_task_wdt_add(nullptr);
-  uint64_t last_wifi_us     = time_source::monotonic_us();
+  uint64_t last_wifi_us      = time_source::monotonic_us();
   uint64_t last_ble_alive_us = time_source::monotonic_us();
-  // Run a Wi-Fi cycle quickly on first boot too — wait one interval to let
-  // the rest of the system settle.
   bool first_cycle = true;
+  // BLE_CONFIG_WINDOW_SEC is 0 on the WROOM, so the BLE->Wi-Fi handoff below is
+  // compiled out entirely: `ble_off` stays false for the whole run, BLE keeps
+  // ticking, and Wi-Fi is always allowed. The dual-core WROOM runs both radios
+  // concurrently with no coexistence workaround. (On the single-core C3 this
+  // same code shuts BLE down after the config window.)
+  bool ble_off = false;
 
   for (;;) {
     esp_task_wdt_reset();
-    ble_service::tick();
-    if (ble_service::is_alive()) {
-      last_ble_alive_us = time_source::monotonic_us();
+    uint64_t now_us = time_source::monotonic_us();
+    uint64_t uptime_sec = now_us / 1000000ULL;
+
+    if (!ble_off) {
+      ble_service::tick();
+      if (ble_service::is_alive()) last_ble_alive_us = now_us;
     }
 
     if (!health::boot_loop_tripped()) {
-      // On-demand scan requested via BLE Wi-Fi Config write of {"action":"scan"}.
-      if (wifi_sync::consume_scan_request()) {
+      bool wifi_allowed;
+#if BLE_CONFIG_WINDOW_SEC > 0
+      if (!ble_off && uptime_sec >= (uint64_t)BLE_CONFIG_WINDOW_SEC) {
+        // Config window is over, but if the app is still connected, don't cut it
+        // off mid-session — hold BLE (and keep Wi-Fi off the radio) until the app
+        // disconnects, then hand the radio to Wi-Fi. Log the deferral once.
+        if (ble_service::is_connected()) {
+          static bool logged_defer = false;
+          if (!logged_defer) {
+            LOG_PRINTLN("[conn] BLE config window over but app is connected — deferring handoff until it disconnects");
+            logged_defer = true;
+          }
+        } else {
+          LOG_PRINTLN("[conn] BLE config window over — shutting BLE down, Wi-Fi takes the radio");
+          ble_service::shutdown();
+          ble_off = true;
+          first_cycle = true;   // connect immediately now that the radio is free
+        }
+      }
+      wifi_allowed = ble_off;   // Wi-Fi only after BLE has handed off the radio
+#else
+      wifi_allowed = true;      // WROOM: BLE + Wi-Fi run concurrently, always
+#endif
+
+      // On-demand Wi-Fi scan requested over BLE (provisioning).
+      if (!ble_off && wifi_sync::consume_scan_request()) {
         wifi_sync::run_scan();
         ble_service::tick();  // push the fresh results immediately
       }
 
-      uint64_t now_us = time_source::monotonic_us();
-      uint64_t since_us = now_us - last_wifi_us;
-      uint64_t interval_us = (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
-      bool periodic_due = first_cycle ? (since_us > 30ULL * 1000000ULL)
-                                       : (since_us >= interval_us);
-      bool triggered = wifi_sync::consume_immediate_sync_request();
-      if (periodic_due || triggered) {
-        first_cycle = false;
-        last_wifi_us = now_us;
-        wifi_sync::run_cycle();
+      if (wifi_allowed) {
+        uint64_t since_us = now_us - last_wifi_us;
+        uint64_t interval_us = (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
+        bool periodic_due = first_cycle ? true : (since_us >= interval_us);
+        bool triggered = wifi_sync::consume_immediate_sync_request();
+        if (periodic_due || triggered) {
+          first_cycle = false;
+          last_wifi_us = now_us;
+          wifi_sync::run_cycle();
+        }
       }
     }
 
@@ -437,9 +475,6 @@ static void connectivity_task(void *) {
     // Independent of the 30 s task WDT — these catch the subtler case where
     // every task is alive but the radio side is silently dead. Guarded by
     // uptime so we never reboot in the first STUCK_*_REBOOT_SEC after boot.
-    uint64_t uptime_sec =
-        time_source::monotonic_us() / 1000000ULL;
-
     if (uptime_sec > STUCK_WIFI_REBOOT_SEC) {
       uint32_t since_post = wifi_sync::seconds_since_last_successful_post();
       // UINT32_MAX = never posted -> don't reboot a brand-new / unprovisioned
@@ -452,14 +487,19 @@ static void connectivity_task(void *) {
       }
     }
 
-    uint64_t since_ble_us = time_source::monotonic_us() - last_ble_alive_us;
-    if (since_ble_us / 1000000ULL > STUCK_BLE_REBOOT_SEC) {
-      LOG_PRINTF("[health] stuck-ble watchdog: %llu s since BLE was alive, restarting\n",
-                 (unsigned long long)(since_ble_us / 1000000ULL));
-      delay(100);
-      esp_restart();
+    // Stuck-BLE watchdog only applies while BLE is meant to be alive. After the
+    // intentional handoff shutdown, BLE is off by design — don't reboot on it.
+    if (!ble_off) {
+      uint64_t since_ble_us = time_source::monotonic_us() - last_ble_alive_us;
+      if (since_ble_us / 1000000ULL > STUCK_BLE_REBOOT_SEC) {
+        LOG_PRINTF("[health] stuck-ble watchdog: %llu s since BLE was alive, restarting\n",
+                   (unsigned long long)(since_ble_us / 1000000ULL));
+        delay(100);
+        esp_restart();
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
+
