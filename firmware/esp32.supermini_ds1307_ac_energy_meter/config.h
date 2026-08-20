@@ -59,15 +59,20 @@
 // handshake fail fast so post_batch() just retries next cycle instead.
 #define TLS_HANDSHAKE_TIMEOUT_S 12
 
-// Wi-Fi TX power cap. The Super Mini's onboard LDO (~250 mA) can't sustain the
-// radio's ~335 mA peak at full power (19.5 dBm); the 3V3 rail sags during a TX
-// burst and corrupts the 802.11 auth frames, so association fails with
-// disconnect reason 2 (AUTH_EXPIRE). Field testing (incl. an external 1 A
-// regulator) showed 15 dBm still fails while BLE runs concurrently but 11 dBm
-// is stable, so 11 dBm is the default. Applied via WiFi.setTxPower() after
-// EVERY WiFi.begin() (the driver resets it on reconnect). Raise it only with a
-// stiff 3V3 supply AND if BLE is quieted during sync (see below).
-#define WIFI_TX_POWER           WIFI_POWER_11dBm
+// Wi-Fi TX power DEFAULT, in quarter-dBm units — the ESP32 wifi_power_t enum
+// values are exactly dBm*4 (13 dBm = 52, 11 dBm = 44, 8.5 dBm = 34). Kept as a
+// plain number (NOT the WIFI_POWER_* enum) so files that don't include WiFi.h
+// (e.g. storage.cpp) can use it as the NVS fallback.
+//
+// Why it's capped: the Super Mini's onboard LDO can't sustain the radio's
+// ~335 mA peak at full power (19.5 dBm) — the 3V3 rail sags mid-TX-burst,
+// corrupts the 802.11 auth frames, and association fails with disconnect
+// reason 2 (AUTH_EXPIRE). Even on a stiff external supply, RF coupling from the
+// RTC/PZEM wiring near the PCB antenna lowers the usable ceiling; field testing
+// settled on 13 dBm as the stable point with peripherals wired. Applied via
+// WiFi.setTxPower() after EVERY WiFi.begin(). This is ONLY the fallback — the
+// live value lives in NVS and is settable from the app's Configure Wi-Fi screen.
+#define WIFI_TX_POWER_QDBM      52   // 13 dBm (= WIFI_POWER_13dBm)
 
 // Pause BLE advertising for the duration of each Wi-Fi cycle (connect + NTP +
 // TLS POST). On the single-core ESP32-C3, BLE advertising sharing the radio
