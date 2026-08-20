@@ -391,33 +391,39 @@ private fun RelayCard(
     onMode: (String) -> Unit,
 ) {
     val mode = relay?.mode ?: "auto"
-    val on   = relay?.on ?: false
+    // Fail-safe NC wiring: an ENERGIZED relay (relay.on) CUTS the AC, so the
+    // appliance is powered exactly when the relay is OFF. This card speaks in
+    // appliance terms — the raw coil state is inverted here and never shown:
+    //   device ON  == relay de-energized == relay mode "off"
+    //   device OFF == relay energized    == relay mode "on"
+    val deviceOn = !(relay?.on ?: false)
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Relay", style = MaterialTheme.typography.titleMedium)
+            Text("Appliance power", style = MaterialTheme.typography.titleMedium)
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                Text("State", modifier = Modifier.weight(0.4f),
+                Text("Status", modifier = Modifier.weight(0.4f),
                      color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    if (on) "ON" else "OFF",
+                    if (deviceOn) "ON" else "OFF",
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(0.6f),
-                    color = if (on) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
+                    color = if (deviceOn) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Text(
                 when (mode) {
-                    "on"  -> "Manual override: forced ON (ignores schedule)."
-                    "off" -> "Manual override: forced OFF (ignores schedule)."
+                    "on"  -> "Manual override: appliance forced OFF (AC cut, ignores schedule)."
+                    "off" -> "Manual override: appliance forced ON (ignores schedule)."
                     else  -> "Auto: following the server schedule."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RelayModeButton("On",   active = mode == "on",   modifier = Modifier.weight(1f)) { onMode("on") }
-                RelayModeButton("Off",  active = mode == "off",  modifier = Modifier.weight(1f)) { onMode("off") }
+                // Labels are appliance-perspective; the relay mode sent is inverted.
+                RelayModeButton("On",   active = mode == "off",  modifier = Modifier.weight(1f)) { onMode("off") }
+                RelayModeButton("Off",  active = mode == "on",   modifier = Modifier.weight(1f)) { onMode("on") }
                 RelayModeButton("Auto", active = mode == "auto", modifier = Modifier.weight(1f)) { onMode("auto") }
             }
         }
