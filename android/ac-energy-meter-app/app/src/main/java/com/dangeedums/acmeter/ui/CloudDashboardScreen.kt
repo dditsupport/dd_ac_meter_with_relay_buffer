@@ -101,6 +101,36 @@ fun CloudDashboardScreen(vm: CloudViewModel, onSignOut: () -> Unit) {
             }
         }
 
+        // Meter chips — only for a multi-meter device, which the server tells us
+        // via channel_count. One meter at a time: a device's meters are separate
+        // cumulative counters measuring different loads, so overlaying them on
+        // one small chart would be more confusing than useful.
+        // Derived from the COLLECTED state rather than read off the ViewModel:
+        // ViewModel's state directly would not recompose when the device list
+        // arrives, leaving the picker stuck at its first value.
+        val meterCount = ui.devices
+            .firstOrNull { it.device_id == ui.selectedDeviceId }
+            ?.channel_count?.coerceAtLeast(1) ?: 1
+        if (meterCount > 1) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+            ) {
+                Text("Meter", style = MaterialTheme.typography.labelLarge,
+                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                     modifier = Modifier.align(Alignment.CenterVertically))
+                (1..meterCount).forEach { ch ->
+                    FilterChip(
+                        selected = ui.selectedChannel == ch,
+                        onClick  = { vm.selectChannel(ch) },
+                        label    = { Text("$ch") },
+                    )
+                }
+            }
+        }
+
         // Range chips. Five chips don't fit on narrow phones, so the row
         // scrolls horizontally instead of clipping the last ("12 mo") chip.
         Row(

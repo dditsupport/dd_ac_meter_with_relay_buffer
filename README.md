@@ -136,6 +136,9 @@ Relay config is stored and pushed per channel:
   that one. Reports instead offer **one meter at a time** with no combined
   option — that chart's series are already days, so folding meters in would
   multiply the lines or silently sum unrelated loads;
+- the Android app's Cloud tab gets a **Meter** chip row (shown only when the
+  server reports `channel_count > 1`) and charts one meter at a time, matching
+  the reports rather than the dashboard overlay;
 - the live relay indicator shows **one pill per relay** (`R1 LOAD ON`,
   `R2 AC CUT`, …), backed by a new `ed_device_relay_state` table keyed
   `(device_id, channel)` that ingest refreshes from the POST's `relays[]`;
