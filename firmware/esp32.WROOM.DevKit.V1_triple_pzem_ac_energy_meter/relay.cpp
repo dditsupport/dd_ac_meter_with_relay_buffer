@@ -15,6 +15,9 @@ static const int s_pin[RELAY_COUNT] = {
 #if RELAY_COUNT > 1
   PIN_RELAY2,
 #endif
+#if RELAY_COUNT > 2
+  PIN_RELAY3,
+#endif
 };
 
 // Cutoff state machine (per off-hours period, per relay).

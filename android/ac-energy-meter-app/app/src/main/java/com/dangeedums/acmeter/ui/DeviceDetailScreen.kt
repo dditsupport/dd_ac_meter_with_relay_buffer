@@ -402,7 +402,7 @@ private fun RelayCard(
 ) {
     if (relays.isEmpty()) return
     // The firmware reports one entry per relay it actually has, so a 1-relay
-    // and a 2-relay device are the same screen with a different list length.
+    // a 2-relay and a 3-relay device are the same screen, just a longer list.
     val multi = relays.size > 1
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
