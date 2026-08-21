@@ -129,7 +129,12 @@ Relay config is stored and pushed per channel:
   (hidden on single-relay devices) driven by the device's reported
   `relay_count`;
 - the dashboard and reports take a `channel` too, with a **Meter** selector that
-  appears only for multi-meter devices;
+  appears only for multi-meter devices. It defaults to **All meters**
+  (`channel=0`), which queries every meter and overlays them — one colour-coded
+  series per meter on both charts, a per-meter breakdown row, and combined
+  Current / Today / Peak / Period-total cards. Picking a single meter narrows to
+  that one. Reports sum the meters into a site total instead of overlaying, so
+  the day-vs-day chart keeps one line per day;
 - over BLE, write `{"ch":1,"mode":"on"|"off"|"auto"}` to drive one relay —
   omit `ch` to set them all — and reading returns
   `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
