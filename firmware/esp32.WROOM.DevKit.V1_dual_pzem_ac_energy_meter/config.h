@@ -192,11 +192,6 @@
 
 #define PZEM_BAUD               9600
 
-// Which channel's wattage drives the compressor-aware relay cutoff:
-//   0 = sum of all channels, 1 = channel 1 only, 2 = channel 2 only.
-// Use a specific channel when only one meter feeds the AC the relay controls;
-// use 0 when the relay cuts a circuit that both meters measure.
-#define RELAY_POWER_SOURCE      0
 
 #define PIN_I2C_SDA             4         // DS1307 SDA
 #define PIN_I2C_SCL             15        // DS1307 SCL — GPIO 15 is a strapping pin but idles HIGH (I2C pull-ups), so boot is unaffected
@@ -248,11 +243,22 @@
 // (AC on) and is driven LOW to ENERGIZE the coil (cut AC), so RELAY_ACTIVE_HIGH
 // is 0. Set it to 1 for a board whose coil drives on a HIGH input.
 //
+// ONE RELAY PER PZEM. Relay N cuts the AC that PZEM N measures, and runs its
+// own independent schedule, cutoff state machine and manual override — so the
+// compressor-idle check for relay N looks only at channel N's wattage. That
+// pairing is the whole point: cutting a circuit based on another meter's load
+// would either hard-cut a running compressor or never cut at all.
+//
+// GPIO 26/27 are plain side-header pins — not strapping pins, and clear of the
+// GPIO 6..11 SPI-flash block.
+//
 // The AC-allowed "open hours" schedule + the two knobs below are pushed by the
-// server per device (relay_schedule / relay_compressor_watts / relay_grace_min)
-// and cached in NVS so cutoff keeps working through a Wi-Fi outage. The values
-// here are only defaults until the server pushes real ones.
-#define PIN_RELAY               26
+// server PER CHANNEL (relay_channels[] in the ingest response) and cached in
+// NVS so cutoff keeps working through a Wi-Fi outage. The values here are only
+// defaults until the server pushes real ones.
+#define RELAY_COUNT             PZEM_CHANNELS   // one relay per meter
+#define PIN_RELAY1              26              // cuts the AC measured by PZEM 1
+#define PIN_RELAY2              27              // cuts the AC measured by PZEM 2
 #define RELAY_ACTIVE_HIGH       0
 
 // Compressor "is-running" watt threshold: below it the compressor is off, so

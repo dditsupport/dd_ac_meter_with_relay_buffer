@@ -321,7 +321,6 @@ static void sampling_task(void *) {
     float today_kwh[PZEM_CHANNELS]   = {0.0f};
     bool  today_partial[PZEM_CHANNELS];
     bool  any_ok = false;
-    float relay_watts = 0.0f;
 
     uint32_t today = 0;
     bool have_clock = time_source::wall_clock_known();
@@ -381,13 +380,6 @@ static void sampling_task(void *) {
         today_partial[ch] = !anchor_clean;
       }
 
-      // Accumulate the wattage that drives the relay cutoff (config.h
-      // RELAY_POWER_SOURCE: 0 = sum of all channels, N = channel N only).
-#if RELAY_POWER_SOURCE == 0
-      relay_watts += sample[ch].power;
-#else
-      if (ch == (RELAY_POWER_SOURCE - 1)) relay_watts = sample[ch].power;
-#endif
     }
     if (have_clock) prev_day_observed = today;
 
@@ -412,15 +404,12 @@ static void sampling_task(void *) {
       state_unlock();
     }
 
-    // Feed the relay's compressor-aware cutoff. `valid` requires that the
-    // channel(s) feeding it actually read this tick — otherwise the cutoff
-    // would treat a dead meter as 0 W and cut a running compressor.
-#if RELAY_POWER_SOURCE == 0
-    bool relay_valid = any_ok;
-#else
-    bool relay_valid = ok[RELAY_POWER_SOURCE - 1];
-#endif
-    relay::update_power(relay_watts, relay_valid);
+    // Feed each relay the wattage from ITS OWN PZEM channel. Passing ok[ch] as
+    // `valid` matters: a failed read must not look like 0 W, or the cutoff
+    // would treat a dead meter as an idle compressor and cut it under load.
+    for (uint8_t ch = 0; ch < PZEM_CHANNELS && ch < relay::count(); ++ch) {
+      relay::update_power(ch, sample[ch].power, ok[ch]);
+    }
 
     // Periodic log row. Cadence is server-configurable (storage::log_interval_sec)
     // and falls back to LOG_INTERVAL_SEC_DEFAULT (config.h) on a fresh device.

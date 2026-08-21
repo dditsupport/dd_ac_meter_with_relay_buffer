@@ -106,9 +106,29 @@ Every reading carries a 1-based channel end to end:
 - readings are keyed on `(device_id, seq, channel)` in the database.
 
 Each channel keeps independent totals, midnight anchors and fault status, so one
-dead meter never masks or blocks the other. `RELAY_POWER_SOURCE` in `config.h`
-picks what drives the compressor-aware cutoff: the sum of both meters (default)
-or one specific channel.
+dead meter never masks or blocks the other.
+
+**Two relays, one per PZEM.** Relay N (GPIO 26 for PZEM 1, GPIO 27 for PZEM 2)
+cuts the AC that meter N measures, and runs a fully independent open-hours
+schedule, cutoff state machine, manual override and NVS-cached config. The
+compressor-idle check for relay N looks only at channel N's wattage — that
+pairing is the point, since deciding relay 1 from meter 2's load would either
+hard-cut a running compressor or never cut at all. A failed read on a channel
+counts as "compressor may be running", so a dead meter is never mistaken for an
+idle one.
+
+Relay config is stored and pushed per channel:
+
+- `ed_device_relay_schedule` is keyed `(device_id, channel)`;
+- the ingest response carries `relay_channels: [{ch, version, schedule[],
+  compressor_watts, grace_min}, ...]` (the old flat `relay_*` fields are still
+  emitted from channel 1, and firmware that receives only those applies them to
+  every relay);
+- `/api/admin_relay.php` takes a `channel` parameter (default 1) on
+  `get` / `set` / `clear`;
+- over BLE, write `{"ch":1,"mode":"on"|"off"|"auto"}` to drive one relay —
+  omit `ch` to set them all — and reading returns
+  `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
 
 Server side, `/api/readings.php` takes a `channel` parameter (default `1`).
 Scoping every query to one channel is required, not cosmetic — a device's two

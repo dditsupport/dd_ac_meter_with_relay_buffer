@@ -331,9 +331,11 @@ class ServerCfgCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// Relay: write {"mode":"on"|"off"|"auto"} to manually drive the relay GPIO.
-//   on   -> hold energised, off -> hold de-energised, auto -> follow schedule.
-// The new state is reflected back on this characteristic (READ + NOTIFY).
+// Relay: write {"ch":1,"mode":"on"|"off"|"auto"} to manually drive one relay.
+//   on   -> hold energised (AC cut), off -> hold de-energised (AC on),
+//   auto -> follow that relay's schedule.
+// "ch" is the 1-based relay/PZEM channel; omit it (or send 0) to apply the mode
+// to EVERY relay. Reading returns the status of all relays (READ + NOTIFY).
 class RelayCallbacks : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
     c->setValue(is_authed(info) ? to_std(relay::status_json()) : std::string());
@@ -348,16 +350,30 @@ class RelayCallbacks : public NimBLECharacteristicCallbacks {
     }
     String m = (const char *)(doc["mode"] | "");
     m.toLowerCase();
-    if      (m == "on")   relay::set_mode(relay::Mode::FORCE_ON);
-    else if (m == "off")  relay::set_mode(relay::Mode::FORCE_OFF);
-    else if (m == "auto") relay::set_mode(relay::Mode::AUTO);
+    relay::Mode want;
+    if      (m == "on")   want = relay::Mode::FORCE_ON;
+    else if (m == "off")  want = relay::Mode::FORCE_OFF;
+    else if (m == "auto") want = relay::Mode::AUTO;
     else { LOG_PRINTF("[ble] relay unknown mode: %s\n", m.c_str()); return; }
+
+    int ch = doc["ch"] | 0;               // 0 / absent = all relays
+    if (ch == 0) {
+      for (uint8_t r = 0; r < relay::count(); ++r) relay::set_mode(r, want);
+      LOG_PRINTF("[ble] relay set to %s (all)\n", m.c_str());
+    } else if (ch >= 1 && ch <= (int)relay::count()) {
+      uint8_t r = (uint8_t)(ch - 1);
+      relay::set_mode(r, want);
+      LOG_PRINTF("[ble] relay%d set to %s (energized=%d)\n",
+                 ch, m.c_str(), relay::is_on(r));
+    } else {
+      LOG_PRINTF("[ble] relay bad channel: %d\n", ch);
+      return;
+    }
 
     // Reflect the resulting state immediately.
     s_last_relay_json = relay::status_json();
     c->setValue(to_std(s_last_relay_json));
     c->notify();
-    LOG_PRINTF("[ble] relay set to %s (on=%d)\n", relay::mode_str(), relay::is_on());
   }
 };
 

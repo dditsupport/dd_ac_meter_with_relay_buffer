@@ -302,28 +302,64 @@ if ($effective_interval > 0) {
 // 'relay_version' to skip reapplying when nothing has changed. The compressor
 // columns are selected in a guarded query so a DB that hasn't run migration
 // 005 still serves the schedule.
+// A dual-PZEM unit has one relay per meter, each with its own row keyed by
+// channel, so fetch ALL of this device's rows and send them as relay_channels[].
+// The flat relay_* fields are still emitted from channel 1 so a single-relay
+// firmware keeps working unchanged.
+$srows = [];
 try {
     $st = $pdo->prepare(
-        'SELECT schedule_json, version, compressor_watts, grace_min
-           FROM ed_device_relay_schedule WHERE device_id = ?'
+        'SELECT channel, schedule_json, version, compressor_watts, grace_min
+           FROM ed_device_relay_schedule WHERE device_id = ? ORDER BY channel'
     );
     $st->execute([$device_id]);
-    $srow = $st->fetch();
+    $srows = $st->fetchAll();
 } catch (Throwable $e) {
-    $st = $pdo->prepare(
-        'SELECT schedule_json, version FROM ed_device_relay_schedule WHERE device_id = ?'
-    );
-    $st->execute([$device_id]);
-    $srow = $st->fetch();
-}
-if ($srow) {
-    $resp['relay_version']  = (int)$srow['version'];
-    $resp['relay_schedule'] = json_decode($srow['schedule_json'], true) ?: [];
-    if (isset($srow['compressor_watts'])) {
-        $resp['relay_compressor_watts'] = (int)$srow['compressor_watts'];
+    // DB without migration 011 (no channel column) and/or 005 (no compressor
+    // columns): fall back to the single per-device row, treated as channel 1.
+    try {
+        $st = $pdo->prepare(
+            'SELECT schedule_json, version, compressor_watts, grace_min
+               FROM ed_device_relay_schedule WHERE device_id = ?'
+        );
+        $st->execute([$device_id]);
+        $srows = $st->fetchAll();
+    } catch (Throwable $e2) {
+        $st = $pdo->prepare(
+            'SELECT schedule_json, version FROM ed_device_relay_schedule WHERE device_id = ?'
+        );
+        $st->execute([$device_id]);
+        $srows = $st->fetchAll();
     }
-    if (isset($srow['grace_min'])) {
-        $resp['relay_grace_min'] = (int)$srow['grace_min'];
+}
+
+if ($srows) {
+    $channels = [];
+    foreach ($srows as $srow) {
+        $entry = [
+            'ch'       => isset($srow['channel']) ? (int)$srow['channel'] : 1,
+            'version'  => (int)$srow['version'],
+            'schedule' => json_decode($srow['schedule_json'], true) ?: [],
+        ];
+        if (isset($srow['compressor_watts'])) {
+            $entry['compressor_watts'] = (int)$srow['compressor_watts'];
+        }
+        if (isset($srow['grace_min'])) {
+            $entry['grace_min'] = (int)$srow['grace_min'];
+        }
+        $channels[] = $entry;
+    }
+    $resp['relay_channels'] = $channels;
+
+    // Back-compat: flat fields mirror channel 1 (or the first row present).
+    $first = $channels[0];
+    $resp['relay_version']  = $first['version'];
+    $resp['relay_schedule'] = $first['schedule'];
+    if (isset($first['compressor_watts'])) {
+        $resp['relay_compressor_watts'] = $first['compressor_watts'];
+    }
+    if (isset($first['grace_min'])) {
+        $resp['relay_grace_min'] = $first['grace_min'];
     }
 }
 

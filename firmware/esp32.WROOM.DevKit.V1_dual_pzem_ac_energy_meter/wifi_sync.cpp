@@ -276,10 +276,23 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // views without inferring it from whichever channels happen to have data.
   doc["channel_count"] = pzem::channel_count();
 
-  // Report current relay state so the server can show a live indicator.
-  doc["relay_on"]      = relay::is_on();
-  doc["relay_mode"]    = relay::mode_str();   // "auto" | "on" | "off"
-  doc["relay_version"] = relay::version();
+  // Report every relay's live state so the server can show per-channel
+  // indicators. relay_on/relay_mode/relay_version stay as relay 1's values so a
+  // server that only understands one relay still sees something sensible.
+  doc["relay_on"]      = relay::is_on(0);
+  doc["relay_mode"]    = relay::mode_str(0);  // "auto" | "on" | "off"
+  doc["relay_version"] = relay::version(0);
+  doc["relay_count"]   = relay::count();
+  {
+    JsonArray ra = doc.createNestedArray("relays");
+    for (uint8_t r = 0; r < relay::count(); ++r) {
+      JsonObject o = ra.createNestedObject();
+      o["ch"]      = r + 1;                   // 1-based on the wire
+      o["on"]      = relay::is_on(r);         // true = energized = AC cut
+      o["mode"]    = relay::mode_str(r);
+      o["version"] = relay::version(r);
+    }
+  }
 
   // Hourly DS1307 drift (signed seconds, + = RTC ahead of true time), measured
   // at the last NTP sync. rtc_drift_epoch is the NTP epoch of that measurement;
@@ -421,7 +434,12 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  StaticJsonDocument<256> rdoc;
+  // Must hold the whole ingest response, including relay_channels[] — one
+  // entry per relay, each carrying a full open-hours schedule array. 256 B was
+  // enough for the old single flat relay config but overflows here, and an
+  // overflowing StaticJsonDocument fails the parse outright (so the device
+  // would report "bad response JSON" and never pick up its relay config).
+  StaticJsonDocument<2048> rdoc;
   if (deserializeJson(rdoc, resp)) {
     LOG_PRINTF("[wifi] bad response JSON: %s\n", resp.c_str());
     return false;
@@ -447,11 +465,28 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     }
   }
 
-  // Optional: server-pushed relay config. The server attaches relay_version
-  // (uint), relay_schedule (AC-allowed open hours array), and the two cutoff
-  // knobs relay_compressor_watts / relay_grace_min to every ingest response.
-  // relay::apply() is a no-op when nothing changed; 0 leaves a knob unchanged.
-  if (rdoc.containsKey("relay_version")) {
+  // Server-pushed relay config. Preferred form is per channel:
+  //   "relay_channels": [ {ch, version, schedule[], compressor_watts, grace_min} ]
+  // so each relay gets its own open-hours window and cutoff knobs. An entry
+  // with an out-of-range ch is ignored. relay::apply() is a no-op when nothing
+  // changed; 0 leaves a knob unchanged.
+  if (rdoc.containsKey("relay_channels")) {
+    for (JsonObject rc : rdoc["relay_channels"].as<JsonArray>()) {
+      int ch = rc["ch"] | 0;
+      if (ch < 1 || ch > (int)relay::count()) continue;
+      String sched_json;
+      if (rc.containsKey("schedule")) serializeJson(rc["schedule"], sched_json);
+      else                            sched_json = "[]";
+      relay::apply((uint8_t)(ch - 1),
+                   rc["version"] | 0,
+                   sched_json,
+                   rc["compressor_watts"] | 0,   // 0 = leave unchanged
+                   rc["grace_min"]        | 0);
+    }
+  } else if (rdoc.containsKey("relay_version")) {
+    // Legacy flat form (single-relay servers): one config for the whole device.
+    // Apply it to EVERY relay so a one-relay backend still drives this unit
+    // predictably rather than leaving relay 2 unconfigured.
     uint32_t rv = rdoc["relay_version"] | 0;
     String sched_json;
     if (rdoc.containsKey("relay_schedule")) {
@@ -461,7 +496,9 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     }
     uint32_t cw = rdoc["relay_compressor_watts"] | 0;   // 0 = leave unchanged
     uint32_t gm = rdoc["relay_grace_min"]        | 0;   // 0 = leave unchanged
-    relay::apply(rv, sched_json, cw, gm);
+    for (uint8_t r = 0; r < relay::count(); ++r) {
+      relay::apply(r, rv, sched_json, cw, gm);
+    }
   }
 
   // Server-time fallback: if neither the DS1307 nor NTP gave us a wall

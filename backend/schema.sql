@@ -142,7 +142,11 @@ CREATE TABLE IF NOT EXISTS ed_ingest_log (
 -- Per-device relay config for the off-hours AC cutoff. The firmware fetches
 -- this in every ingest.php response and drives the relay accordingly.
 CREATE TABLE IF NOT EXISTS ed_device_relay_schedule (
-  device_id     VARCHAR(32)     NOT NULL PRIMARY KEY,
+  device_id     VARCHAR(32)     NOT NULL,
+  -- 1-based relay/PZEM channel. A dual-PZEM unit has one relay per meter, each
+  -- with its OWN open-hours window and cutoff knobs, so the config is keyed per
+  -- channel rather than per device.
+  channel       TINYINT UNSIGNED NOT NULL DEFAULT 1,
   -- AC-ALLOWED open hours as a JSON array of windows:
   --   [{days:[0..6], on:"HH:MM", off:"HH:MM"}, ...]
   -- days: 0=Sun, 1=Mon, ..., 6=Sat. The AC is powered inside these windows;
@@ -161,6 +165,7 @@ CREATE TABLE IF NOT EXISTS ed_device_relay_schedule (
   version       INT UNSIGNED    NOT NULL DEFAULT 1,
   updated_at    TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP
                                 ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (device_id, channel),
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
