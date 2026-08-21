@@ -42,6 +42,10 @@ $current_bid = (int)   ($body['current_boot_id'] ?? 0);
 $current_up  = (int)   ($body['current_boot_uptime_sec'] ?? 0);
 $boot_hist   =          $body['boot_history']  ?? [];
 $readings    =          $body['readings']      ?? [];
+// How many PZEM channels this unit reports (dual-PZEM firmware sends 2).
+// Absent on single-meter firmware, which is exactly 1.
+$channel_count = (int)($body['channel_count'] ?? 1);
+if ($channel_count < 1) $channel_count = 1;
 
 // Device-reported relay state (optional) for the live admin indicator.
 $relay_on    = array_key_exists('relay_on', $body) ? (int)(bool)$body['relay_on'] : null;
@@ -95,11 +99,23 @@ try {
     )->execute([$device_id, $device_id]);
 }
 
-$pdo->prepare(
-    'INSERT INTO ed_device_meta (device_id, fw_version, last_sync_at)
-     VALUES (?, ?, NOW())
-     ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version), last_sync_at = NOW()'
-)->execute([$device_id, $fw_version]);
+// Guarded so a DB without migration 010 (no channel_count column) still
+// ingests normally — same pattern as the relay/RTC columns below.
+try {
+    $pdo->prepare(
+        'INSERT INTO ed_device_meta (device_id, fw_version, channel_count, last_sync_at)
+         VALUES (?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version),
+                                 channel_count = VALUES(channel_count),
+                                 last_sync_at = NOW()'
+    )->execute([$device_id, $fw_version, $channel_count]);
+} catch (Throwable $e) {
+    $pdo->prepare(
+        'INSERT INTO ed_device_meta (device_id, fw_version, last_sync_at)
+         VALUES (?, ?, NOW())
+         ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version), last_sync_at = NOW()'
+    )->execute([$device_id, $fw_version]);
+}
 
 // Best-effort: record the device-reported relay state for the live admin
 // indicator. Guarded so a DB that hasn't run migration 003 (relay_* columns)
@@ -210,15 +226,20 @@ $pdo->beginTransaction();
 try {
     $ins = $pdo->prepare(
         'INSERT INTO ed_energy_readings
-           (device_id, seq, wall_time, time_confidence, boot_id, sec_since_boot,
+           (device_id, seq, channel, wall_time, time_confidence, boot_id, sec_since_boot,
             voltage, current_a, power_w, energy_wh, power_factor, frequency_hz)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE id = id'
     );
     foreach ($readings as $r) {
         $seq = (int)($r['seq'] ?? 0);
         $bid = (int)($r['boot_id'] ?? 0);
         $sec = (int)($r['sec'] ?? 0);
+        // Multi-PZEM devices tag each reading with a 1-based channel; rows from
+        // one sampling instant share `seq` and differ only by `ch`. Single-meter
+        // firmware omits it, so default to channel 1.
+        $ch  = (int)($r['ch'] ?? 1);
+        if ($ch < 1) $ch = 1;
         if ($seq <= 0 || $bid <= 0 || !isset($offsets[$bid])) continue;
 
         $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
@@ -228,6 +249,7 @@ try {
         $ins->execute([
             $device_id,
             $seq,
+            $ch,
             $wt_str,
             $conf,
             $bid,

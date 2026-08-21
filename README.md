@@ -82,9 +82,38 @@ the same logic. The differences are hardware-driven:
 | Wi-Fi TX power | capped at 11 dBm (weak onboard LDO) | full 19.5 dBm |
 | PZEM UART | `Serial1` | `Serial2` |
 | Pin map | C3 pins | ESP32 pins; GPIO 6..11 reserved for SPI flash |
+| PZEM meters | 1 | 1, or **2** with the dual-PZEM build |
 
 TX power is runtime-settable over BLE on both boards, so either can be trimmed
 if a particular install proves marginal.
+
+### Dual-PZEM build (WROOM only)
+
+`esp32.WROOM.DevKit.V1_dual_pzem_ac_energy_meter/` (`FW_VERSION` **3.0.0**)
+reads **two** PZEM-004T meters from one ESP32 and reports both under a single
+`device_id`. Each meter gets its own hardware UART — channel 1 on UART2
+(GPIO 16/17), channel 2 on UART1 (GPIO 32/33) — because the TTL PZEM variant
+drives its TX line permanently and two of them on one UART would collide. Set
+`PZEM_CHANNELS` and the `PIN_PZEM*` / `PZEM*_ADDR` entries in `config.h`.
+
+Every reading carries a 1-based channel end to end:
+
+- log rows are `seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz` — one sampling instant writes
+  one row **per channel**, all sharing `seq`, so seq-based acking still advances
+  both channels together;
+- the ingest POST tags each reading with `ch` and the device with
+  `channel_count`;
+- readings are keyed on `(device_id, seq, channel)` in the database.
+
+Each channel keeps independent totals, midnight anchors and fault status, so one
+dead meter never masks or blocks the other. `RELAY_POWER_SOURCE` in `config.h`
+picks what drives the compressor-aware cutoff: the sum of both meters (default)
+or one specific channel.
+
+Server side, `/api/readings.php` takes a `channel` parameter (default `1`).
+Scoping every query to one channel is required, not cosmetic — a device's two
+meters are separate cumulative counters, so mixing them would make the
+`MAX(energy_wh) - MIN(energy_wh)` energy total meaningless.
 
 ## How fast does data reach the cloud?
 
