@@ -9,7 +9,8 @@ $pdo = db();
 // DB.
 $base_cols  = 'd.device_id, d.friendly_name, d.location, l.location_name, d.capacity_kw,
                d.owner_user_id, u.username AS owner_username, d.first_seen_at,
-               s.schedule_json AS relay_schedule_json,
+               (SELECT s.schedule_json FROM ed_device_relay_schedule s
+                 WHERE s.device_id = d.device_id LIMIT 1) AS relay_schedule_json,
                m.fw_version, m.last_sync_at, m.last_seq, m.last_boot_id,
                m.total_readings, m.log_interval_sec';
 $opt_relay  = ', m.relay_on, m.relay_mode, m.relay_reported_at';
@@ -17,10 +18,15 @@ $opt_drift  = ', m.rtc_drift_sec, m.rtc_drift_at';
 $opt_rssi   = ', m.wifi_rssi';
 $opt_coin   = ', m.coincell_mv';
 $opt_pin    = ', d.ble_pin';
+$opt_counts = ', m.channel_count, m.relay_count';
+// NOTE: relay schedules are keyed (device_id, channel) since migration 011, so
+// ed_device_relay_schedule must NOT be joined here — a 3-relay device would
+// otherwise return three rows and appear three times in this list. The
+// schedule-present indicator above uses a LIMIT 1 subquery instead, which is
+// all it needs (it only asks "does any schedule exist").
 $from       = ' FROM ed_energy_devices d
                 LEFT JOIN ed_users               u ON u.id = d.owner_user_id
                 LEFT JOIN locations              l ON l.location_id = d.location
-                LEFT JOIN ed_device_relay_schedule s ON s.device_id = d.device_id
                 LEFT JOIN ed_device_meta         m ON m.device_id = d.device_id
                ORDER BY d.friendly_name';
 
@@ -30,6 +36,7 @@ $from       = ' FROM ed_energy_devices d
 $RELAY_CONV_FW = '2.0.0';
 $devices = [];
 foreach ([
+    $opt_pin . $opt_relay . $opt_drift . $opt_rssi . $opt_coin . $opt_counts,
     $opt_pin . $opt_relay . $opt_drift . $opt_rssi . $opt_coin,
     $opt_pin . $opt_relay . $opt_drift . $opt_rssi,
     $opt_pin . $opt_relay . $opt_drift,
@@ -117,7 +124,8 @@ $locations = $pdo->query(
         $schedSet  = $schedJson !== '' && trim($schedJson) !== '[]';
         $relayRisk = $fwOld && $schedSet;
       ?>
-        <div class="dev" data-id="<?= h($d['device_id']) ?>" data-fw-old="<?= $relayRisk ? '1' : '' ?>">
+        <div class="dev" data-id="<?= h($d['device_id']) ?>" data-fw-old="<?= $relayRisk ? '1' : '' ?>"
+             data-relay-count="<?= (int)($d['relay_count'] ?? 1) ?>">
           <div class="dev-row line1">
             <span class="f-id" title="Device ID"><?= h($d['device_id']) ?></span>
             <label class="field f-name"><span class="lbl">Friendly name</span>
@@ -195,6 +203,12 @@ $locations = $pdo->query(
 <dialog id="relay-dialog" class="relay-dialog">
   <form method="dialog">
     <h3 style="margin:0 0 0.5rem">AC-cutoff relay for <span id="relay-dev"></span></h3>
+    <p id="relay-ch-wrap" class="muted" style="margin:0 0 0.75rem" hidden>
+      Relay
+      <select id="relay-ch"></select>
+      &mdash; each relay has its own schedule and cuts only the AC its own meter measures.
+      Switching here loads that relay's windows; save applies to the selected relay only.
+    </p>
     <div id="relay-fw-warn" class="relay-fw-warn" hidden>
       ⚠ This device reports firmware &lt; 2.0.0, which uses the <b>old</b> relay convention —
       it energizes <i>inside</i> the window, so a schedule here <b>cuts the AC during open hours</b>.
@@ -318,6 +332,9 @@ document.querySelectorAll('button.regen-pin').forEach(btn => btn.addEventListene
 const DOW_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const dlg       = document.getElementById('relay-dialog');
 const dlgDevEl  = document.getElementById('relay-dev');
+const chSel     = document.getElementById('relay-ch');
+const chWrap    = document.getElementById('relay-ch-wrap');
+let currentCh   = 1;
 const rowsEl    = document.getElementById('relay-rows');
 let currentDev  = null;
 
@@ -401,22 +418,48 @@ function collectWindows() {
   return out;
 }
 
+// Load one relay's stored config into the form. Each relay of a multi-PZEM
+// device has its own schedule row, so this refetches per channel.
+async function loadRelayChannel(ch) {
+  currentCh = ch;
+  rowsEl.innerHTML = '';
+  const r = await postRelay('get', { device_id: currentDev, channel: ch });
+  if (!r.ok) { alert('Error: ' + r.error); return false; }
+  const schedule = r.schedule || [];
+  if (schedule.length === 0) renderRow({ days:[0,1,2,3,4,5,6], on:'09:00', off:'02:00' });
+  else schedule.forEach(renderRow);
+  document.getElementById('relay-cw').value = r.compressor_watts ?? 800;
+  document.getElementById('relay-gm').value = r.grace_min ?? 60;
+  return true;
+}
+
 document.querySelectorAll('button.relay').forEach(btn => btn.addEventListener('click', async () => {
   const tr = btn.closest('.dev');
   currentDev = tr.dataset.id;
   dlgDevEl.textContent = currentDev;
   // Warn if this device's firmware predates the AC-allowed-hours convention.
   document.getElementById('relay-fw-warn').hidden = tr.dataset.fwOld !== '1';
-  rowsEl.innerHTML = '';
-  const r = await postRelay('get', { device_id: currentDev });
-  if (!r.ok) { alert('Error: ' + r.error); return; }
-  const schedule = r.schedule || [];
-  if (schedule.length === 0) renderRow({ days:[0,1,2,3,4,5,6], on:'09:00', off:'02:00' });
-  else schedule.forEach(renderRow);
-  document.getElementById('relay-cw').value = r.compressor_watts ?? 800;
-  document.getElementById('relay-gm').value = r.grace_min ?? 60;
+
+  // The device reports how many relays it has, so the picker matches the
+  // hardware instead of being hardcoded. One relay -> no picker at all.
+  const relayCount = Math.max(1, parseInt(tr.dataset.relayCount || '1', 10));
+  chSel.innerHTML = '';
+  for (let i = 1; i <= relayCount; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = i + ' (meter ' + i + ')';
+    chSel.appendChild(opt);
+  }
+  chSel.value = '1';
+  chWrap.hidden = relayCount < 2;
+
+  if (!await loadRelayChannel(1)) return;
   dlg.showModal();
 }));
+
+chSel.addEventListener('change', () => {
+  loadRelayChannel(parseInt(chSel.value, 10) || 1);
+});
 
 document.getElementById('relay-add'   ).addEventListener('click', () => renderRow({ days:[], on:'09:00', off:'02:00' }));
 document.getElementById('relay-cancel').addEventListener('click', () => dlg.close());
@@ -424,12 +467,14 @@ document.getElementById('relay-save'  ).addEventListener('click', async () => {
   const windows = collectWindows();
   const r = await postRelay('set', {
     device_id: currentDev,
+    channel: currentCh,
     schedule_json: JSON.stringify(windows),
     compressor_watts: document.getElementById('relay-cw').value,
     grace_min: document.getElementById('relay-gm').value,
   });
   if (!r.ok) { alert('Error: ' + (r.detail || r.error)); return; }
-  alert('Saved (version ' + r.version + '). Takes effect on the device\'s next sync.');
+  alert('Saved relay ' + currentCh + ' (version ' + r.version + ').' +
+        ' Takes effect on the device\'s next sync.');
   dlg.close();
 });
 

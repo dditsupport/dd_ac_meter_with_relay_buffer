@@ -141,14 +141,19 @@ void set_mode(Mode m) {
 }
 
 String status_json() {
-  StaticJsonDocument<192> doc;
-  doc["mode"]            = mode_str();
-  doc["energized"]       = s_state;          // true = AC cut
-  doc["sm"]              = sm_str(s_sm);
-  doc["latest_w"]        = s_power_valid ? (int)(s_latest_power_w + 0.5f) : -1;
-  doc["compressor_w"]    = s_compressor_watts;
-  doc["grace_min"]       = s_grace_min;
-  doc["sched_version"]   = s_version;
+  // Always an ARRAY, even though this build has a single relay: the companion
+  // app renders one on/off/auto control per entry, so a 1-relay and a 2-relay
+  // device differ only in how many entries arrive — no per-build parsing.
+  // Live state only, matching the multi-relay builds byte for byte so the app
+  // parses one format. Kept small because this rides a BLE NOTIFY, which
+  // truncates at MTU-3 rather than fragmenting.
+  StaticJsonDocument<224> doc;
+  JsonArray arr = doc.createNestedArray("relays");
+  JsonObject o = arr.createNestedObject();
+  o["ch"]        = 1;
+  o["mode"]      = mode_str();
+  o["energized"] = s_state;          // true = AC cut
+  o["latest_w"]  = s_power_valid ? (int)(s_latest_power_w + 0.5f) : -1;
   String out;
   serializeJson(doc, out);
   return out;

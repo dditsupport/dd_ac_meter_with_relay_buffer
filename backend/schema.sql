@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS ed_device_meta (
   last_boot_id     INT UNSIGNED  NOT NULL DEFAULT 0,
   total_readings   BIGINT UNSIGNED NOT NULL DEFAULT 0,
   log_interval_sec INT UNSIGNED  NOT NULL DEFAULT 900,
+  -- How many PZEM meters this unit reports (1 for the single-meter builds, 2
+  -- for the dual-PZEM WROOM build). Lets the dashboard lay out per-channel
+  -- views without inferring it from whichever channels happen to have data.
+  channel_count    TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  -- How many relays the unit has (one per meter on the dual build). The cloud
+  -- uses this to decide how many per-channel relay schedules to push back.
+  relay_count      TINYINT UNSIGNED NOT NULL DEFAULT 1,
   -- Last relay state the device reported on an ingest POST (live indicator).
   relay_on          TINYINT(1)  NULL,
   relay_mode        VARCHAR(8)  NULL,   -- 'auto' | 'on' | 'off'
@@ -95,6 +102,10 @@ CREATE TABLE IF NOT EXISTS ed_energy_readings (
   id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   device_id       VARCHAR(32)   NOT NULL,
   seq             BIGINT UNSIGNED NOT NULL,
+  -- 1-based PZEM channel. A dual-PZEM device reports both meters under one
+  -- device_id: rows from a single sampling instant share `seq` and differ only
+  -- by `channel`. Single-meter firmware omits it and the server stores 1.
+  channel         TINYINT UNSIGNED NOT NULL DEFAULT 1,
   wall_time       DATETIME       NOT NULL,
   time_confidence ENUM('exact','approx') NOT NULL DEFAULT 'exact',
   boot_id         INT UNSIGNED   NOT NULL,
@@ -106,8 +117,12 @@ CREATE TABLE IF NOT EXISTS ed_energy_readings (
   power_factor    DECIMAL(4,3)   NOT NULL,
   frequency_hz    DECIMAL(5,2)   NULL,
   ingested_at     TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_device_seq    (device_id, seq),
+  -- (device_id, seq, channel) is what makes a duplicate POST a no-op AND lets
+  -- the two channels of one sampling instant coexist. Keying on (device_id,
+  -- seq) alone would make channel 2 collide with channel 1 and be dropped.
+  UNIQUE KEY uq_device_seq_ch  (device_id, seq, channel),
   KEY idx_device_time          (device_id, wall_time),
+  KEY idx_device_ch_time       (device_id, channel, wall_time),
   KEY idx_device_date_energy   (device_id, wall_time, energy_wh),
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -130,7 +145,11 @@ CREATE TABLE IF NOT EXISTS ed_ingest_log (
 -- Per-device relay config for the off-hours AC cutoff. The firmware fetches
 -- this in every ingest.php response and drives the relay accordingly.
 CREATE TABLE IF NOT EXISTS ed_device_relay_schedule (
-  device_id     VARCHAR(32)     NOT NULL PRIMARY KEY,
+  device_id     VARCHAR(32)     NOT NULL,
+  -- 1-based relay/PZEM channel. A dual-PZEM unit has one relay per meter, each
+  -- with its OWN open-hours window and cutoff knobs, so the config is keyed per
+  -- channel rather than per device.
+  channel       TINYINT UNSIGNED NOT NULL DEFAULT 1,
   -- AC-ALLOWED open hours as a JSON array of windows:
   --   [{days:[0..6], on:"HH:MM", off:"HH:MM"}, ...]
   -- days: 0=Sun, 1=Mon, ..., 6=Sat. The AC is powered inside these windows;
@@ -149,6 +168,7 @@ CREATE TABLE IF NOT EXISTS ed_device_relay_schedule (
   version       INT UNSIGNED    NOT NULL DEFAULT 1,
   updated_at    TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP
                                 ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (device_id, channel),
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

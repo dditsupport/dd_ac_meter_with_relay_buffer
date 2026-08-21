@@ -1,6 +1,8 @@
 <?php
 // Admin endpoint for per-device relay config (off-hours AC cutoff).
-//   action=get   { device_id }
+//   All actions take an optional 1-based `channel` (default 1) selecting which
+//   relay of a multi-PZEM device to read/write.
+//   action=get   { device_id, channel? }
 //        -> {ok, schedule, version, compressor_watts, grace_min}
 //   action=set   { device_id, schedule_json, compressor_watts?, grace_min? }
 //        -> {ok, version}
@@ -23,6 +25,11 @@ check_csrf();
 
 $pdo    = db();
 $action = (string)($_POST['action'] ?? '');
+// 1-based relay/PZEM channel. A dual-PZEM unit has one relay per meter, each
+// with its own schedule row, so every read/write here is scoped to a channel.
+// Defaults to 1, which is the only channel a single-relay device has.
+$ch = (int)($_POST['channel'] ?? 1);
+if ($ch < 1) $ch = 1;
 $dev    = (string)($_POST['device_id'] ?? '');
 
 // Live relay-state poll for the admin devices table. No device_id needed —
@@ -57,9 +64,9 @@ case 'get':
     try {
         $st = $pdo->prepare(
             'SELECT schedule_json, version, compressor_watts, grace_min
-               FROM ed_device_relay_schedule WHERE device_id = ?'
+               FROM ed_device_relay_schedule WHERE device_id = ? AND channel = ?'
         );
-        $st->execute([$dev]);
+        $st->execute([$dev, $ch]);
         $row = $st->fetch();
     } catch (Throwable $e) {
         $st = $pdo->prepare(
@@ -70,6 +77,7 @@ case 'get':
     }
     json_response(200, [
         'ok'               => true,
+        'channel'          => $ch,
         'schedule'         => $row ? json_decode($row['schedule_json'], true) : [],
         'version'          => $row ? (int)$row['version'] : 0,
         'compressor_watts' => $row && isset($row['compressor_watts']) ? (int)$row['compressor_watts'] : 800,
@@ -97,14 +105,14 @@ case 'set':
     try {
         $pdo->prepare(
             'INSERT INTO ed_device_relay_schedule
-                  (device_id, schedule_json, compressor_watts, grace_min, version)
-                  VALUES (?, ?, ?, ?, 1)
+                  (device_id, channel, schedule_json, compressor_watts, grace_min, version)
+                  VALUES (?, ?, ?, ?, ?, 1)
              ON DUPLICATE KEY UPDATE
                   schedule_json    = VALUES(schedule_json),
                   compressor_watts = VALUES(compressor_watts),
                   grace_min        = VALUES(grace_min),
                   version          = version + 1'
-        )->execute([$dev, $norm, $cw, $gm]);
+        )->execute([$dev, $ch, $norm, $cw, $gm]);
     } catch (Throwable $e) {
         $pdo->prepare(
             'INSERT INTO ed_device_relay_schedule (device_id, schedule_json, version)
@@ -115,13 +123,17 @@ case 'set':
         )->execute([$dev, $norm]);
     }
 
-    $st = $pdo->prepare('SELECT version FROM ed_device_relay_schedule WHERE device_id = ?');
-    $st->execute([$dev]);
-    json_response(200, ['ok' => true, 'version' => (int)$st->fetchColumn()]);
+    $st = $pdo->prepare(
+        'SELECT version FROM ed_device_relay_schedule WHERE device_id = ? AND channel = ?'
+    );
+    $st->execute([$dev, $ch]);
+    json_response(200, ['ok' => true, 'channel' => $ch, 'version' => (int)$st->fetchColumn()]);
 
 case 'clear':
-    $pdo->prepare('DELETE FROM ed_device_relay_schedule WHERE device_id = ?')->execute([$dev]);
-    json_response(200, ['ok' => true]);
+    $pdo->prepare(
+        'DELETE FROM ed_device_relay_schedule WHERE device_id = ? AND channel = ?'
+    )->execute([$dev, $ch]);
+    json_response(200, ['ok' => true, 'channel' => $ch]);
 
 default:
     json_response(400, ['ok' => false, 'error' => 'unknown_action']);

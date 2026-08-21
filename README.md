@@ -82,9 +82,105 @@ the same logic. The differences are hardware-driven:
 | Wi-Fi TX power | capped at 11 dBm (weak onboard LDO) | full 19.5 dBm |
 | PZEM UART | `Serial1` | `Serial2` |
 | Pin map | C3 pins | ESP32 pins; GPIO 6..11 reserved for SPI flash |
+| PZEM meters | 1 | 1, or **2** with the dual-PZEM build |
 
 TX power is runtime-settable over BLE on both boards, so either can be trimmed
 if a particular install proves marginal.
+
+### Dual-PZEM build (WROOM only)
+
+`esp32.WROOM.DevKit.V1_dual_pzem_ac_energy_meter/` (`FW_VERSION` **3.0.0**)
+reads **two** PZEM-004T meters from one ESP32 and reports both under a single
+`device_id`. Each meter gets its own hardware UART — channel 1 on UART2
+(GPIO 16/17), channel 2 on UART1 (GPIO 32/33) — because the TTL PZEM variant
+drives its TX line permanently and two of them on one UART would collide. Set
+`PZEM_CHANNELS` and the `PIN_PZEM*` / `PZEM*_ADDR` entries in `config.h`.
+
+Every reading carries a 1-based channel end to end:
+
+- log rows are `seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz` — one sampling instant writes
+  one row **per channel**, all sharing `seq`, so seq-based acking still advances
+  both channels together;
+- the ingest POST tags each reading with `ch` and the device with
+  `channel_count`;
+- readings are keyed on `(device_id, seq, channel)` in the database.
+
+Each channel keeps independent totals, midnight anchors and fault status, so one
+dead meter never masks or blocks the other.
+
+**Two relays, one per PZEM.** Relay N (GPIO 26 for PZEM 1, GPIO 27 for PZEM 2)
+cuts the AC that meter N measures, and runs a fully independent open-hours
+schedule, cutoff state machine, manual override and NVS-cached config. The
+compressor-idle check for relay N looks only at channel N's wattage — that
+pairing is the point, since deciding relay 1 from meter 2's load would either
+hard-cut a running compressor or never cut at all. A failed read on a channel
+counts as "compressor may be running", so a dead meter is never mistaken for an
+idle one.
+
+Relay config is stored and pushed per channel:
+
+- `ed_device_relay_schedule` is keyed `(device_id, channel)`;
+- the ingest response carries `relay_channels: [{ch, version, schedule[],
+  compressor_watts, grace_min}, ...]` (the old flat `relay_*` fields are still
+  emitted from channel 1, and firmware that receives only those applies them to
+  every relay);
+- `/api/admin_relay.php` takes a `channel` parameter (default 1) on
+  `get` / `set` / `clear`, and the admin Devices page shows a relay picker
+  (hidden on single-relay devices) driven by the device's reported
+  `relay_count`;
+- the dashboard and reports take a `channel` too, with a **Meter** selector that
+  appears only for multi-meter devices;
+- over BLE, write `{"ch":1,"mode":"on"|"off"|"auto"}` to drive one relay —
+  omit `ch` to set them all — and reading returns
+  `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
+
+### Triple-PZEM build (3 meters, 3 relays)
+
+`esp32.WROOM.DevKit.V1_triple_pzem_ac_energy_meter/` (`FW_VERSION` **3.1.0**)
+uses **all three** of the ESP32's hardware UARTs for meters — ch1 UART2
+(GPIO 16/17), ch2 UART1 (GPIO 32/33), ch3 UART0 (GPIO 3/1) — with relays on
+GPIO 26/27/25.
+
+UART0 is also the flashing port. That is fine for a soldered-down module: the
+programmer is only attached on the bench and PZEM-3 only in the field. The
+*runtime* conflict is the real one, so **`DEBUG_SERIAL` decides who owns UART0,
+and therefore how many meters the build has**:
+
+| `DEBUG_SERIAL` | UART0 | Meters / relays | Use |
+|---|---|---|---|
+| `1` | serial console | 2 + 2 | bench testing |
+| `0` | PZEM-3 Modbus | 3 + 3 | production (no console) |
+
+Coupling the two removes the footgun — logging and Modbus can never share the
+line. With `DEBUG_SERIAL 0` the port is left strictly alone: the `LOG_*` macros
+compile to nothing, `Serial.begin()` is skipped, the serial command console is
+omitted (reading UART0 would *consume* PZEM-3's reply bytes), and
+`log_serial::init()` silences the ESP-IDF's own logging.
+
+Because the firmware reports its live `channel_count`/`relay_count`, the app and
+the cloud follow whichever way it was built — flip the flag, reflash, and both
+ends show 2 or 3 meters with no other change.
+
+### The device declares its own layout
+
+Every build reports `channel_count` and `relay_count` — in the BLE Device Info
+characteristic and in each ingest POST — so nothing has to be configured
+per-device on the other side:
+
+- the **cloud** knows how many per-channel relay schedules are worth pushing
+  (both counts are stored on `ed_device_meta`);
+- the **Android app** renders exactly that many on/off/auto control sets, so
+  one screen serves a 1-relay and a 2-relay meter with no build flavours.
+
+To keep that possible, **all** firmware builds report relay state in the same
+shape — an array — even the single-relay ones, which simply send a one-entry
+`relays[]`. The app reads the array and renders per entry; it never needs to
+know which build it is talking to.
+
+Server side, `/api/readings.php` takes a `channel` parameter (default `1`).
+Scoping every query to one channel is required, not cosmetic — a device's two
+meters are separate cumulative counters, so mixing them would make the
+`MAX(energy_wh) - MIN(energy_wh)` energy total meaningless.
 
 ## How fast does data reach the cloud?
 

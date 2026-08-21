@@ -42,6 +42,14 @@ $current_bid = (int)   ($body['current_boot_id'] ?? 0);
 $current_up  = (int)   ($body['current_boot_uptime_sec'] ?? 0);
 $boot_hist   =          $body['boot_history']  ?? [];
 $readings    =          $body['readings']      ?? [];
+// How many PZEM channels this unit reports (dual-PZEM firmware sends 2).
+// Absent on single-meter firmware, which is exactly 1.
+$channel_count = (int)($body['channel_count'] ?? 1);
+if ($channel_count < 1) $channel_count = 1;
+// How many relays the unit has (one per meter on the dual build). Tells the
+// cloud how many per-channel relay schedules are worth pushing back.
+$relay_count = (int)($body['relay_count'] ?? 1);
+if ($relay_count < 1) $relay_count = 1;
 
 // Device-reported relay state (optional) for the live admin indicator.
 $relay_on    = array_key_exists('relay_on', $body) ? (int)(bool)$body['relay_on'] : null;
@@ -95,11 +103,24 @@ try {
     )->execute([$device_id, $device_id]);
 }
 
-$pdo->prepare(
-    'INSERT INTO ed_device_meta (device_id, fw_version, last_sync_at)
-     VALUES (?, ?, NOW())
-     ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version), last_sync_at = NOW()'
-)->execute([$device_id, $fw_version]);
+// Guarded so a DB without migration 010 (no channel_count column) still
+// ingests normally — same pattern as the relay/RTC columns below.
+try {
+    $pdo->prepare(
+        'INSERT INTO ed_device_meta (device_id, fw_version, channel_count, relay_count, last_sync_at)
+         VALUES (?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version),
+                                 channel_count = VALUES(channel_count),
+                                 relay_count = VALUES(relay_count),
+                                 last_sync_at = NOW()'
+    )->execute([$device_id, $fw_version, $channel_count, $relay_count]);
+} catch (Throwable $e) {
+    $pdo->prepare(
+        'INSERT INTO ed_device_meta (device_id, fw_version, last_sync_at)
+         VALUES (?, ?, NOW())
+         ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version), last_sync_at = NOW()'
+    )->execute([$device_id, $fw_version]);
+}
 
 // Best-effort: record the device-reported relay state for the live admin
 // indicator. Guarded so a DB that hasn't run migration 003 (relay_* columns)
@@ -210,15 +231,20 @@ $pdo->beginTransaction();
 try {
     $ins = $pdo->prepare(
         'INSERT INTO ed_energy_readings
-           (device_id, seq, wall_time, time_confidence, boot_id, sec_since_boot,
+           (device_id, seq, channel, wall_time, time_confidence, boot_id, sec_since_boot,
             voltage, current_a, power_w, energy_wh, power_factor, frequency_hz)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE id = id'
     );
     foreach ($readings as $r) {
         $seq = (int)($r['seq'] ?? 0);
         $bid = (int)($r['boot_id'] ?? 0);
         $sec = (int)($r['sec'] ?? 0);
+        // Multi-PZEM devices tag each reading with a 1-based channel; rows from
+        // one sampling instant share `seq` and differ only by `ch`. Single-meter
+        // firmware omits it, so default to channel 1.
+        $ch  = (int)($r['ch'] ?? 1);
+        if ($ch < 1) $ch = 1;
         if ($seq <= 0 || $bid <= 0 || !isset($offsets[$bid])) continue;
 
         $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
@@ -228,6 +254,7 @@ try {
         $ins->execute([
             $device_id,
             $seq,
+            $ch,
             $wt_str,
             $conf,
             $bid,
@@ -280,28 +307,64 @@ if ($effective_interval > 0) {
 // 'relay_version' to skip reapplying when nothing has changed. The compressor
 // columns are selected in a guarded query so a DB that hasn't run migration
 // 005 still serves the schedule.
+// A dual-PZEM unit has one relay per meter, each with its own row keyed by
+// channel, so fetch ALL of this device's rows and send them as relay_channels[].
+// The flat relay_* fields are still emitted from channel 1 so a single-relay
+// firmware keeps working unchanged.
+$srows = [];
 try {
     $st = $pdo->prepare(
-        'SELECT schedule_json, version, compressor_watts, grace_min
-           FROM ed_device_relay_schedule WHERE device_id = ?'
+        'SELECT channel, schedule_json, version, compressor_watts, grace_min
+           FROM ed_device_relay_schedule WHERE device_id = ? ORDER BY channel'
     );
     $st->execute([$device_id]);
-    $srow = $st->fetch();
+    $srows = $st->fetchAll();
 } catch (Throwable $e) {
-    $st = $pdo->prepare(
-        'SELECT schedule_json, version FROM ed_device_relay_schedule WHERE device_id = ?'
-    );
-    $st->execute([$device_id]);
-    $srow = $st->fetch();
-}
-if ($srow) {
-    $resp['relay_version']  = (int)$srow['version'];
-    $resp['relay_schedule'] = json_decode($srow['schedule_json'], true) ?: [];
-    if (isset($srow['compressor_watts'])) {
-        $resp['relay_compressor_watts'] = (int)$srow['compressor_watts'];
+    // DB without migration 011 (no channel column) and/or 005 (no compressor
+    // columns): fall back to the single per-device row, treated as channel 1.
+    try {
+        $st = $pdo->prepare(
+            'SELECT schedule_json, version, compressor_watts, grace_min
+               FROM ed_device_relay_schedule WHERE device_id = ?'
+        );
+        $st->execute([$device_id]);
+        $srows = $st->fetchAll();
+    } catch (Throwable $e2) {
+        $st = $pdo->prepare(
+            'SELECT schedule_json, version FROM ed_device_relay_schedule WHERE device_id = ?'
+        );
+        $st->execute([$device_id]);
+        $srows = $st->fetchAll();
     }
-    if (isset($srow['grace_min'])) {
-        $resp['relay_grace_min'] = (int)$srow['grace_min'];
+}
+
+if ($srows) {
+    $channels = [];
+    foreach ($srows as $srow) {
+        $entry = [
+            'ch'       => isset($srow['channel']) ? (int)$srow['channel'] : 1,
+            'version'  => (int)$srow['version'],
+            'schedule' => json_decode($srow['schedule_json'], true) ?: [],
+        ];
+        if (isset($srow['compressor_watts'])) {
+            $entry['compressor_watts'] = (int)$srow['compressor_watts'];
+        }
+        if (isset($srow['grace_min'])) {
+            $entry['grace_min'] = (int)$srow['grace_min'];
+        }
+        $channels[] = $entry;
+    }
+    $resp['relay_channels'] = $channels;
+
+    // Back-compat: flat fields mirror channel 1 (or the first row present).
+    $first = $channels[0];
+    $resp['relay_version']  = $first['version'];
+    $resp['relay_schedule'] = $first['schedule'];
+    if (isset($first['compressor_watts'])) {
+        $resp['relay_compressor_watts'] = $first['compressor_watts'];
+    }
+    if (isset($first['grace_min'])) {
+        $resp['relay_grace_min'] = $first['grace_min'];
     }
 }
 

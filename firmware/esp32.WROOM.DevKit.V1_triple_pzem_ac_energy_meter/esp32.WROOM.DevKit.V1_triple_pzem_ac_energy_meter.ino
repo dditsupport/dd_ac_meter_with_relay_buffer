@@ -1,0 +1,586 @@
+// AC Energy Meter — ESP32 WROOM firmware, TRIPLE-PZEM build (v3.1.0)
+//
+// Uses ALL THREE of the ESP32's hardware UARTs for meters, which means UART0 is
+// no longer the serial console. DEBUG_SERIAL in config.h picks which way that
+// port is used, and therefore how many meters this build has:
+//   DEBUG_SERIAL 1 -> UART0 = console, 2 meters + 2 relays (bench testing)
+//   DEBUG_SERIAL 0 -> UART0 = PZEM-3,  3 meters + 3 relays (production, silent)
+// The firmware reports its live channel_count/relay_count, so the app and the
+// cloud follow whichever way it was built with no changes at either end.
+//
+// Reads PZEM_CHANNELS PZEM-004T meters — each on its own hardware UART —
+// and reports both under one device_id, tagging every reading with a 1-based
+// channel. Per channel it keeps independent totals, midnight anchors and fault
+// status, so one dead meter never masks or blocks the other.
+//
+// Sketch entry point. Sets up the brownout detector, mounts storage, then
+// spawns two pinned FreeRTOS tasks: SamplingTask on core 0 (both PZEMs) and
+// ConnectivityTask on core 1 (BLE always, Wi-Fi periodic). The WROOM is
+// dual-core with no BLE/Wi-Fi coexistence problem, so unlike the C3 Super Mini
+// build BLE stays up for the whole session alongside Wi-Fi. All shared mutable
+// state lives in g_state, guarded by g_state_mutex.
+//
+// See docs/PINOUT.md for wiring and docs/PROVISIONING.md for setup steps.
+
+#include "config.h"
+#include "shared_state.h"
+#include "identity.h"
+#include "time_source.h"
+#include "pzem.h"
+#include "storage.h"
+#include "health.h"
+#include "wifi_sync.h"
+#include "ble_service.h"
+#include "led.h"
+#include "relay.h"
+#include "rtc.h"
+
+#include <esp_task_wdt.h>
+#include <esp_system.h>
+#include <esp_mac.h>
+#include "log_serial.h"
+
+// ---- Global shared state ----------------------------------------------------
+SharedState g_state;
+SemaphoreHandle_t g_state_mutex;
+
+// Set by loop() on a BOOT-button long-press; consumed by sampling_task, which
+// owns all PZEM/Modbus access, so the reset never races a concurrent read.
+static volatile bool g_energy_reset_req = false;
+
+// ---- Forward declarations ---------------------------------------------------
+static void sampling_task(void *);
+static void connectivity_task(void *);
+#if DEBUG_SERIAL
+static void handle_serial_command(const String &cmd);
+#endif
+
+extern "C" void health_mark_clean_uptime();
+
+// ---- Setup ------------------------------------------------------------------
+void setup() {
+  // The brownout detector is enabled by default in ESP-IDF 5.x at the chip
+  // default threshold (~2.4 V). Override via menuconfig / sdkconfig if needed.
+
+#if DEBUG_SERIAL
+  Serial.begin(115200);
+  log_serial::init();
+  // Give the serial monitor time to (re)attach after reset before the first
+  // prints, so the boot banner isn't lost.
+  delay(1000);
+  LOG_PRINTLN();
+  LOG_PRINTLN("=== AC Energy Meter boot ===");
+#else
+  // Production: UART0 belongs to PZEM-3, so we must NOT call Serial.begin() —
+  // the PZEM driver opens the port itself at 9600 8N1. log_serial::init() still
+  // runs, but here its only job is to silence the ESP-IDF's own logging so
+  // nothing else writes to the Modbus line.
+  log_serial::init();
+#endif
+
+  g_state_mutex = xSemaphoreCreateMutex();
+  if (!g_state_mutex) {
+    LOG_PRINTLN("[fatal] state mutex alloc failed");
+    while (true) delay(1000);
+  }
+
+  time_source::begin();
+  health::begin();
+  if (!storage::begin()) {
+    LOG_PRINTLN("[fatal] storage init failed; check flash");
+    while (true) delay(1000);
+  }
+  pzem::begin();
+
+  // BOOT button for the fresh-install energy reset (long-press in loop()).
+  pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
+
+  // Seed wall clock from the DS1307 if it's healthy. This lets "Today:" energy
+  // totals track from boot instead of only counting the current session until
+  // NTP or BLE sets the clock.
+  if (rtc::begin()) {
+    time_t epoch = rtc::read_epoch();
+    if (epoch > 0 && time_source::set_wall_clock(epoch)) {
+      struct tm lt;
+      localtime_r(&epoch, &lt);
+      char tbuf[40];
+      strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S %Z", &lt);
+      LOG_PRINTF("[boot] RTC time: %s  (epoch=%ld)\n", tbuf, (long)epoch);
+    } else {
+      LOG_PRINTLN("[boot] RTC present but returned no time");
+    }
+  } else {
+    LOG_PRINTLN("[boot] RTC unavailable (lost power or not wired)");
+  }
+
+  // Seed shared state.
+  if (state_lock(pdMS_TO_TICKS(1000))) {
+    g_state.boot_id = storage::boot_id();
+    g_state.last_seq = storage::last_seq();
+    g_state.unsynced_count = storage::current_unsynced_count();
+    g_state.buffer_full = storage::is_buffer_full();
+    g_state.wifi_status = WIFI_IDLE;
+    g_state.ble_status = BLE_OFF;
+    g_state.wall_clock_known = time_source::wall_clock_known();
+    state_unlock();
+  }
+
+  LOG_PRINTF("Device ID: %s  fw=%s  boot=%u  unsynced=%u\n",
+                identity::device_id().c_str(), identity::fw_version(),
+                storage::boot_id(), storage::current_unsynced_count());
+
+  // Diagnostic: print both the factory base MAC (what esptool shows) and the
+  // effective Wi-Fi STA MAC (what WiFi.macAddress() returns). They differ if
+  // a Custom MAC has been burned into eFuse, which is why two ESP32s can
+  // print different BLE names than their printed chip MACs would suggest.
+  {
+    uint8_t base[6] = {0};
+    uint8_t sta[6]  = {0};
+    esp_efuse_mac_get_default(base);
+    esp_read_mac(sta, ESP_MAC_WIFI_STA);
+    LOG_PRINTF("[boot] eFuse base MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  base[0], base[1], base[2], base[3], base[4], base[5]);
+    LOG_PRINTF("[boot] Wi-Fi STA MAC : %02X:%02X:%02X:%02X:%02X:%02X (used for device_id)\n",
+                  sta[0],  sta[1],  sta[2],  sta[3],  sta[4],  sta[5]);
+  }
+
+  // Hardcoded Wi-Fi fallback for bench testing. If WIFI_SSID is non-empty
+  // and the NVS slot has no credentials yet, copy them in. Once provisioned
+  // via BLE the saved value wins and this block becomes a no-op.
+  if (sizeof(WIFI_SSID) > 1) {
+    storage::WifiCred existing[MAX_WIFI_CREDS];
+    if (storage::get_wifi_creds(existing, MAX_WIFI_CREDS) == 0) {
+      if (storage::add_wifi_cred(WIFI_SSID, WIFI_PASSWORD)) {
+        LOG_PRINTF("[boot] seeded Wi-Fi from config.h: %s\n", WIFI_SSID);
+      }
+    }
+  }
+
+  ble_service::begin();
+  wifi_sync::begin();
+  led::begin();
+  relay::begin();
+
+  xTaskCreatePinnedToCore(sampling_task, "sampling",
+                          SAMPLING_TASK_STACK, nullptr, SAMPLING_TASK_PRIO,
+                          nullptr, 0);
+  xTaskCreatePinnedToCore(connectivity_task, "conn",
+                          CONN_TASK_STACK, nullptr, CONN_TASK_PRIO,
+                          nullptr, 1);
+}
+
+// ---- Main loop (idle / serial console / WDT feeder) ------------------------
+void loop() {
+  // With DEBUG_SERIAL == 0 this reader is compiled out. That is not just an
+  // optimisation: UART0 is PZEM-3's bus then, so reading it would CONSUME bytes
+  // of PZEM-3's Modbus replies and make channel 3 read as permanently failed.
+#if DEBUG_SERIAL
+  static String line;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (line.length()) {
+        handle_serial_command(line);
+        line = "";
+      }
+    } else if (line.length() < 64) {
+      line += c;
+    }
+  }
+#endif
+  // BOOT button (GPIO 0) long-press = zero the PZEM energy register (fresh
+  // install). We only raise a request here; sampling_task performs the reset so
+  // all PZEM access stays on one task. Fires once per hold.
+  static uint32_t boot_press_start_ms = 0;
+  static bool     boot_reset_fired    = false;
+  if (digitalRead(PIN_BOOT_BUTTON) == LOW) {
+    if (boot_press_start_ms == 0) boot_press_start_ms = millis();
+    if (!boot_reset_fired && (millis() - boot_press_start_ms) >= FACTORY_RESET_HOLD_MS) {
+      boot_reset_fired   = true;
+      g_energy_reset_req = true;
+      LOG_PRINTLN("[reset] BOOT held — energy reset requested");
+    }
+  } else {
+    boot_press_start_ms = 0;
+    boot_reset_fired    = false;
+  }
+
+  // Factory reset requested over BLE (Android app). Done here in the main loop,
+  // outside the NimBLE callback, so the NVS erase + reboot run from a safe
+  // context. This wipes the device to a fresh state and restarts it.
+  if (storage::consume_factory_reset_request()) {
+    LOG_PRINTLN("[reset] factory reset requested — wiping NVS + log, rebooting");
+    storage::factory_reset();
+    delay(300);        // let the log line flush before the restart
+    esp_restart();
+  }
+
+  led::tick();
+  relay::tick();
+  delay(50);
+}
+
+#if DEBUG_SERIAL
+static void handle_serial_command(const String &cmd) {
+  String c = cmd;
+  c.trim();
+  c.toUpperCase();
+  if (c == "DUMP") {
+    storage::dump_log_to_serial();
+  } else if (c == "BOOTS") {
+    storage::dump_boots_to_serial();
+  } else if (c == "CLEAR") {
+    storage::clear_log();
+  } else if (c == "WIFI") {
+    storage::WifiCred creds[MAX_WIFI_CREDS];
+    size_t n = storage::get_wifi_creds(creds, MAX_WIFI_CREDS);
+    LOG_PRINTF("%u saved networks\n", (unsigned)n);
+    for (size_t i = 0; i < n; ++i) {
+      LOG_PRINTF("  %u: %s\n", (unsigned)i, creds[i].ssid.c_str());
+    }
+  } else if (c == "INFO") {
+    LOG_PRINTF("id=%s fw=%s boot=%u last_seq=%llu unsynced=%u free=%u\n",
+                  identity::device_id().c_str(), identity::fw_version(),
+                  storage::boot_id(), (unsigned long long)storage::last_seq(),
+                  storage::current_unsynced_count(),
+                  (unsigned)storage::free_bytes());
+  } else if (c == "SYNC") {
+    LOG_PRINTLN("[cmd] requesting immediate Wi-Fi sync");
+    wifi_sync::request_immediate_sync();
+  } else if (c == "CLEARBOOTS") {
+    storage::clear_boot_history();
+    LOG_PRINTLN("[cmd] boot_history cleared from NVS");
+  } else if (c == "LOG") {
+    // Append a synthetic row using the latest sample so the next sync
+    // has something to send. Useful for end-to-end testing without
+    // waiting LOG_INTERVAL_SEC.
+    SharedState snap;
+    if (state_snapshot(snap)) {
+      uint64_t seq = storage::last_seq() + 1;
+      bool wrote_any = false;
+      // One row per channel, sharing this seq — same shape the sampling task
+      // writes, so a SYNC after this exercises the real multi-channel path.
+      for (uint8_t ch = 0; ch < PZEM_CHANNELS; ++ch) {
+        storage::RowFields rf;
+        rf.seq = seq;
+        rf.channel = (uint8_t)(ch + 1);
+        rf.boot_id = storage::boot_id();
+        rf.sec_since_boot = (uint32_t)(time_source::monotonic_us() / 1000000ULL);
+        rf.V  = snap.ch[ch].latest.voltage;
+        rf.I  = snap.ch[ch].latest.current;
+        rf.P  = snap.ch[ch].latest.power;
+        rf.Wh = snap.ch[ch].latest.energy_wh;
+        rf.PF = snap.ch[ch].latest.pf;
+        rf.Hz = snap.ch[ch].latest.frequency;
+        if (storage::append_row(rf)) wrote_any = true;
+      }
+      if (wrote_any) {
+        storage::set_last_seq(seq);
+        wifi_sync::request_immediate_sync();
+        LOG_PRINTF("[cmd] synthetic row(s) seq=%llu logged, sync requested\n",
+                      (unsigned long long)seq);
+      } else {
+        LOG_PRINTLN("[cmd] append_row failed (buffer full?)");
+      }
+    }
+  } else {
+    LOG_PRINTF("unknown command: %s (try DUMP, BOOTS, CLEAR, CLEARBOOTS, WIFI, INFO, SYNC, LOG)\n",
+                  c.c_str());
+  }
+}
+#endif  // DEBUG_SERIAL — serial command console
+
+// ---- SamplingTask (core 0) --------------------------------------------------
+static void sampling_task(void *) {
+  esp_task_wdt_add(nullptr);
+
+  uint64_t last_us = time_source::monotonic_us();
+  uint64_t last_log_us = last_us;
+  uint32_t prev_day_observed = 0;   // last local day this boot has seen
+  bool clean_uptime_marked = false;
+  uint32_t boot_start_us_sec = (uint32_t)(last_us / 1000000ULL);
+
+  // Session anchor = first valid PZEM cumulative reading after this boot, per
+  // channel. RAM-only; resets on every reboot, which is what "session" means.
+  float session_anchor_wh[PZEM_CHANNELS];
+  for (uint8_t i = 0; i < PZEM_CHANNELS; ++i) session_anchor_wh[i] = -1.0f;
+
+  // Last logged PzemStatus per channel, so a fault that develops (or clears)
+  // after boot is reported once per transition rather than every second.
+  PzemStatus last_logged_st[PZEM_CHANNELS];
+  for (uint8_t i = 0; i < PZEM_CHANNELS; ++i) last_logged_st[i] = (PzemStatus)0xFF;
+
+  for (;;) {
+    esp_task_wdt_reset();
+
+    // Fresh-install energy reset — from the BOOT long-press (loop(), which
+    // requests every channel) or the BLE "reset energy" command, which may
+    // target one channel. Done here, on the PZEM-owning task, so the
+    // resetEnergy() Modbus write never races pzem::read().
+    bool reset_from_button = g_energy_reset_req;
+    g_energy_reset_req = false;
+    for (uint8_t ch = 0; ch < PZEM_CHANNELS; ++ch) {
+      bool reset_from_ble = pzem::consume_reset_request(ch);
+      if (!reset_from_button && !reset_from_ble) continue;
+      if (pzem::reset_energy(ch)) {
+        // Re-anchor session; "today" re-anchors on its own when it sees the drop.
+        session_anchor_wh[ch] = -1.0f;
+        LOG_PRINTF("[reset] PZEM ch%u energy register zeroed (%s)\n",
+                   (unsigned)(ch + 1), reset_from_ble ? "BLE app" : "BOOT button");
+      } else {
+        LOG_PRINTF("[reset] pzem::reset_energy(ch%u) failed\n", (unsigned)(ch + 1));
+      }
+    }
+
+    uint64_t now_us = time_source::monotonic_us();
+    last_us = now_us;
+
+    // Read every channel up front, then publish one consistent snapshot.
+    PzemSample sample[PZEM_CHANNELS];
+    bool       ok[PZEM_CHANNELS];
+    PzemStatus st[PZEM_CHANNELS];
+    float total_kwh[PZEM_CHANNELS]   = {0.0f};
+    float session_kwh[PZEM_CHANNELS] = {0.0f};
+    float today_kwh[PZEM_CHANNELS]   = {0.0f};
+    bool  today_partial[PZEM_CHANNELS];
+    bool  any_ok = false;
+
+    uint32_t today = 0;
+    bool have_clock = time_source::wall_clock_known();
+    if (have_clock) today = time_source::local_day_number();
+    // A day rollover is observed once for the whole unit, not per channel.
+    bool observed_rollover =
+        have_clock && (prev_day_observed != 0) && (prev_day_observed != today);
+
+    for (uint8_t ch = 0; ch < PZEM_CHANNELS; ++ch) {
+      sample[ch] = PzemSample{};
+      today_partial[ch] = true;
+      ok[ch] = pzem::read(ch, sample[ch]);
+      st[ch] = pzem::classify(ch, ok[ch], sample[ch]);
+      if (ok[ch]) any_ok = true;
+
+      if (st[ch] != last_logged_st[ch]) {
+        const char *sname = st[ch] == PZEM_OK ? "OK"
+                          : st[ch] == PZEM_STALE ? "STALE (no Modbus response)"
+                          : st[ch] == PZEM_SENSOR_FAULT ? "SENSOR_FAULT (V ~0 while on)"
+                          : "UNKNOWN";
+        LOG_PRINTF("[pzem] ch%u status: %s\n", (unsigned)(ch + 1), sname);
+        last_logged_st[ch] = st[ch];
+      }
+
+      if (!ok[ch]) continue;
+
+      // Total: PZEM's lifetime cumulative reading, straight conversion.
+      total_kwh[ch] = sample[ch].energy_wh / 1000.0f;
+
+      // Session: anchored at this channel's first read of the boot. Re-anchor
+      // if its PZEM rolled back (resetEnergy(), or a hardware reset).
+      if (session_anchor_wh[ch] < 0 || sample[ch].energy_wh < session_anchor_wh[ch]) {
+        session_anchor_wh[ch] = sample[ch].energy_wh;
+      }
+      session_kwh[ch] = (sample[ch].energy_wh - session_anchor_wh[ch]) / 1000.0f;
+
+      // Today: anchored in NVS per channel at the start of the day.
+      if (have_clock) {
+        float    anchor_wh   = storage::today_anchor_wh(ch);
+        uint32_t anchor_day  = storage::today_anchor_day(ch);
+        bool     anchor_clean = storage::today_anchor_clean(ch);
+
+        bool need_reanchor = (anchor_wh < 0) ||
+                             (anchor_day != today) ||
+                             (sample[ch].energy_wh < anchor_wh);
+        if (need_reanchor) {
+          // Clean iff we watched the day boundary tick over during this boot
+          // (so we caught the full day's energy). Otherwise it's a mid-day
+          // boot, a wall-clock-just-arrived case, or a multi-day gap.
+          bool clean = observed_rollover;
+          storage::set_today_anchor(ch, sample[ch].energy_wh, today, clean);
+          anchor_wh = sample[ch].energy_wh;
+          anchor_clean = clean;
+        }
+        today_kwh[ch] = (sample[ch].energy_wh - anchor_wh) / 1000.0f;
+        if (today_kwh[ch] < 0) today_kwh[ch] = 0.0f;
+        today_partial[ch] = !anchor_clean;
+      }
+
+    }
+    if (have_clock) prev_day_observed = today;
+
+    if (state_lock()) {
+      for (uint8_t ch = 0; ch < PZEM_CHANNELS; ++ch) {
+        if (ok[ch]) {
+          g_state.ch[ch].latest      = sample[ch];
+          g_state.ch[ch].total_kwh   = total_kwh[ch];
+          g_state.ch[ch].session_kwh = session_kwh[ch];
+          g_state.ch[ch].today_kwh   = today_kwh[ch];
+          g_state.ch[ch].today_is_partial = today_partial[ch];
+          if (sample[ch].power > g_state.ch[ch].peak_power_w) {
+            g_state.ch[ch].peak_power_w = sample[ch].power;
+          }
+        }
+        g_state.ch[ch].pzem_status = st[ch];
+      }
+      g_state.wall_clock_known = time_source::wall_clock_known();
+      g_state.uptime_sec = (uint32_t)(now_us / 1000000ULL);
+      g_state.unsynced_count = storage::current_unsynced_count();
+      g_state.buffer_full = storage::is_buffer_full();
+      state_unlock();
+    }
+
+    // Feed each relay the wattage from ITS OWN PZEM channel. Passing ok[ch] as
+    // `valid` matters: a failed read must not look like 0 W, or the cutoff
+    // would treat a dead meter as an idle compressor and cut it under load.
+    for (uint8_t ch = 0; ch < PZEM_CHANNELS && ch < relay::count(); ++ch) {
+      relay::update_power(ch, sample[ch].power, ok[ch]);
+    }
+
+    // Periodic log row. Cadence is server-configurable (storage::log_interval_sec)
+    // and falls back to LOG_INTERVAL_SEC_DEFAULT (config.h) on a fresh device.
+    // One sampling instant emits one row PER CHANNEL, all sharing `seq`.
+    uint32_t log_period_sec = storage::log_interval_sec();
+    if ((uint64_t)(now_us - last_log_us) >= (uint64_t)log_period_sec * 1000000ULL) {
+      last_log_us = now_us;
+      if (any_ok) {
+        uint64_t seq = storage::last_seq() + 1;
+        bool wrote_any = false;
+        for (uint8_t ch = 0; ch < PZEM_CHANNELS; ++ch) {
+          // Skip a channel that has no fresh reading; the other still logs.
+          if (!ok[ch]) continue;
+          storage::RowFields rf;
+          rf.seq = seq;
+          rf.channel = (uint8_t)(ch + 1);   // 1-based on the wire
+          rf.boot_id = storage::boot_id();
+          rf.sec_since_boot = (uint32_t)(now_us / 1000000ULL);
+          rf.V  = sample[ch].voltage;
+          rf.I  = sample[ch].current;
+          rf.P  = sample[ch].power;
+          rf.Wh = sample[ch].energy_wh;
+          rf.PF = sample[ch].pf;
+          rf.Hz = sample[ch].frequency;
+          if (storage::append_row(rf)) wrote_any = true;
+        }
+        if (wrote_any) {
+          storage::set_last_seq(seq);
+          if (state_lock()) {
+            g_state.last_seq = seq;
+            g_state.unsynced_count = storage::current_unsynced_count();
+            state_unlock();
+          }
+          // Push as soon as the next ConnectivityTask tick runs. If Wi-Fi is
+          // reachable the rows ship within seconds; if not they stay in
+          // /log.csv and the periodic cycle retries.
+          wifi_sync::request_immediate_sync();
+        }
+      }
+    }
+
+    // Mark clean uptime after passing the boot-loop window.
+    if (!clean_uptime_marked &&
+        (uint32_t)(now_us / 1000000ULL) - boot_start_us_sec >= BOOTLOOP_WINDOW_SEC) {
+      health_mark_clean_uptime();
+      clean_uptime_marked = true;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
+  }
+}
+
+// ---- ConnectivityTask (core 1) ---------------------------------------------
+static void connectivity_task(void *) {
+  esp_task_wdt_add(nullptr);
+  uint64_t last_wifi_us      = time_source::monotonic_us();
+  uint64_t last_ble_alive_us = time_source::monotonic_us();
+  bool first_cycle = true;
+  // BLE_CONFIG_WINDOW_SEC is 0 on the WROOM, so the BLE->Wi-Fi handoff below is
+  // compiled out entirely: `ble_off` stays false for the whole run, BLE keeps
+  // ticking, and Wi-Fi is always allowed. The dual-core WROOM runs both radios
+  // concurrently with no coexistence workaround. (On the single-core C3 this
+  // same code shuts BLE down after the config window.)
+  bool ble_off = false;
+
+  for (;;) {
+    esp_task_wdt_reset();
+    uint64_t now_us = time_source::monotonic_us();
+    uint64_t uptime_sec = now_us / 1000000ULL;
+
+    if (!ble_off) {
+      ble_service::tick();
+      if (ble_service::is_alive()) last_ble_alive_us = now_us;
+    }
+
+    if (!health::boot_loop_tripped()) {
+      bool wifi_allowed;
+#if BLE_CONFIG_WINDOW_SEC > 0
+      if (!ble_off && uptime_sec >= (uint64_t)BLE_CONFIG_WINDOW_SEC) {
+        // Config window is over, but if the app is still connected, don't cut it
+        // off mid-session — hold BLE (and keep Wi-Fi off the radio) until the app
+        // disconnects, then hand the radio to Wi-Fi. Log the deferral once.
+        if (ble_service::is_connected()) {
+          static bool logged_defer = false;
+          if (!logged_defer) {
+            LOG_PRINTLN("[conn] BLE config window over but app is connected — deferring handoff until it disconnects");
+            logged_defer = true;
+          }
+        } else {
+          LOG_PRINTLN("[conn] BLE config window over — shutting BLE down, Wi-Fi takes the radio");
+          ble_service::shutdown();
+          ble_off = true;
+          first_cycle = true;   // connect immediately now that the radio is free
+        }
+      }
+      wifi_allowed = ble_off;   // Wi-Fi only after BLE has handed off the radio
+#else
+      wifi_allowed = true;      // WROOM: BLE + Wi-Fi run concurrently, always
+#endif
+
+      // On-demand Wi-Fi scan requested over BLE (provisioning).
+      if (!ble_off && wifi_sync::consume_scan_request()) {
+        wifi_sync::run_scan();
+        ble_service::tick();  // push the fresh results immediately
+      }
+
+      if (wifi_allowed) {
+        uint64_t since_us = now_us - last_wifi_us;
+        uint64_t interval_us = (uint64_t)WIFI_SCAN_INTERVAL_SEC * 1000000ULL;
+        bool periodic_due = first_cycle ? true : (since_us >= interval_us);
+        bool triggered = wifi_sync::consume_immediate_sync_request();
+        if (periodic_due || triggered) {
+          first_cycle = false;
+          last_wifi_us = now_us;
+          wifi_sync::run_cycle();
+        }
+      }
+    }
+
+    // ---- Stuck-watchdog soft reboots ---------------------------------------
+    // Independent of the 30 s task WDT — these catch the subtler case where
+    // every task is alive but the radio side is silently dead. Guarded by
+    // uptime so we never reboot in the first STUCK_*_REBOOT_SEC after boot.
+    if (uptime_sec > STUCK_WIFI_REBOOT_SEC) {
+      uint32_t since_post = wifi_sync::seconds_since_last_successful_post();
+      // UINT32_MAX = never posted -> don't reboot a brand-new / unprovisioned
+      // device. Only reboot if we *had* been syncing and now can't.
+      if (since_post != UINT32_MAX && since_post > STUCK_WIFI_REBOOT_SEC) {
+        LOG_PRINTF("[health] stuck-wifi watchdog: %u s since last POST, restarting\n",
+                   since_post);
+        delay(100);
+        esp_restart();
+      }
+    }
+
+    // Stuck-BLE watchdog only applies while BLE is meant to be alive. After the
+    // intentional handoff shutdown, BLE is off by design — don't reboot on it.
+    if (!ble_off) {
+      uint64_t since_ble_us = time_source::monotonic_us() - last_ble_alive_us;
+      if (since_ble_us / 1000000ULL > STUCK_BLE_REBOOT_SEC) {
+        LOG_PRINTF("[health] stuck-ble watchdog: %llu s since BLE was alive, restarting\n",
+                   (unsigned long long)(since_ble_us / 1000000ULL));
+        delay(100);
+        esp_restart();
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+

@@ -272,10 +272,14 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   doc["current_boot_id"] = storage::boot_id();
   doc["current_boot_uptime_sec"] = (uint32_t)(time_source::monotonic_us() / 1000000ULL);
 
-  // Report current relay state so the server can show a live indicator.
+  // Report current relay state so the server can show a live indicator, plus
+  // how many meters/relays this unit has so the server knows how many
+  // per-channel schedules to send back.
   doc["relay_on"]      = relay::is_on();
   doc["relay_mode"]    = relay::mode_str();   // "auto" | "on" | "off"
   doc["relay_version"] = relay::version();
+  doc["channel_count"] = 1;
+  doc["relay_count"]   = 1;
 
   // Hourly DS1307 drift (signed seconds, + = RTC ahead of true time), measured
   // at the last NTP sync. rtc_drift_epoch is the NTP epoch of that measurement;

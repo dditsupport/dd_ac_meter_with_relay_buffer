@@ -141,7 +141,10 @@ static void compute_expected(char out65[65]) {
 }
 
 static String build_device_info_json() {
-  StaticJsonDocument<384> doc;
+  // 384 B was already close with the host/path strings; the channel_count and
+  // relay_count fields push it near the edge, and an overflowing
+  // StaticJsonDocument silently truncates the JSON. 512 keeps real margin.
+  StaticJsonDocument<512> doc;
   doc["device_id"] = identity::device_id();
   doc["fw"] = identity::fw_version();
   doc["unsynced_count"] = storage::current_unsynced_count();
@@ -164,6 +167,11 @@ static String build_device_info_json() {
   doc["ingest_host"] = host.isEmpty() ? String(INGEST_HOST_DEFAULT) : host;
   doc["ingest_path"] = INGEST_PATH;
   doc["log_interval_sec"] = storage::log_interval_sec();
+  // How many PZEM meters and relays this build has. The companion app uses
+  // relay_count to decide how many on/off/auto control sets to render, so a
+  // 1-relay and a 2-relay device are handled by the same screen.
+  doc["channel_count"] = 1;
+  doc["relay_count"]   = 1;
   String out;
   serializeJson(doc, out);
   return out;

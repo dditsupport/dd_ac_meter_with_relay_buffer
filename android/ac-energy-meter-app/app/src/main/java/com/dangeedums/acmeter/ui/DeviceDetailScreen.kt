@@ -24,6 +24,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -162,7 +163,10 @@ fun DeviceDetailScreen(
             InfoCard(info, ui.wifi)
 
             Spacer(Modifier.height(12.dp))
-            RelayCard(relay = ui.relay, onMode = { vm.setRelayMode(it) })
+            RelayCard(
+                relays = ui.relays,
+                onMode = { ch, mode -> vm.setApplianceMode(ch, mode) },
+            )
 
             Spacer(Modifier.height(12.dp))
             ActionsCard(
@@ -279,6 +283,12 @@ private fun InfoCard(
             Spacer(Modifier.height(8.dp))
             Field("Device ID", info.deviceId)
             Field("Firmware",  info.fw)
+            // The device reports its own hardware layout, so a 1-meter and a
+            // 2-meter unit are distinguishable at a glance. Only worth a row
+            // when there's more than one of something.
+            if (info.channelCount > 1 || info.relayCount > 1) {
+                Field("Hardware", "${info.channelCount} meter(s) · ${info.relayCount} relay(s)")
+            }
             WifiField(wifi)
             Field("Boot ID",   "${info.currentBootId}  (uptime ${info.uptimeSec}s)")
             Field("Last seq",  info.lastSeq.toString())
@@ -387,44 +397,80 @@ private fun ActionsCard(
 
 @Composable
 private fun RelayCard(
-    relay: com.dangeedums.acmeter.ble.RelayState?,
-    onMode: (String) -> Unit,
+    relays: List<com.dangeedums.acmeter.ble.RelayState>,
+    onMode: (ch: Int, mode: String) -> Unit,
 ) {
-    val mode = relay?.mode ?: "auto"
-    // Fail-safe NC wiring: an ENERGIZED relay (relay.on) CUTS the AC, so the
-    // appliance is powered exactly when the relay is OFF. This card speaks in
-    // appliance terms — the raw coil state is inverted here and never shown:
-    //   device ON  == relay de-energized == relay mode "off"
-    //   device OFF == relay energized    == relay mode "on"
-    val deviceOn = !(relay?.on ?: false)
+    if (relays.isEmpty()) return
+    // The firmware reports one entry per relay it actually has, so a 1-relay
+    // a 2-relay and a 3-relay device are the same screen, just a longer list.
+    val multi = relays.size > 1
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Appliance power", style = MaterialTheme.typography.titleMedium)
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                Text("Status", modifier = Modifier.weight(0.4f),
-                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    if (deviceOn) "ON" else "OFF",
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(0.6f),
-                    color = if (deviceOn) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Text(
-                when (mode) {
-                    "on"  -> "Manual override: appliance forced OFF (AC cut, ignores schedule)."
-                    "off" -> "Manual override: appliance forced ON (ignores schedule)."
-                    else  -> "Auto: following the server schedule."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (multi) "Appliance power (${relays.size} relays)" else "Appliance power",
+                style = MaterialTheme.typography.titleMedium,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Labels are appliance-perspective; the relay mode sent is inverted.
-                RelayModeButton("On",   active = mode == "off",  modifier = Modifier.weight(1f)) { onMode("off") }
-                RelayModeButton("Off",  active = mode == "on",   modifier = Modifier.weight(1f)) { onMode("on") }
-                RelayModeButton("Auto", active = mode == "auto", modifier = Modifier.weight(1f)) { onMode("auto") }
+            relays.forEachIndexed { idx, r ->
+                if (idx > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(4.dp))
+                }
+                RelayRow(relay = r, showChannel = multi, onMode = onMode)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RelayRow(
+    relay: com.dangeedums.acmeter.ble.RelayState,
+    showChannel: Boolean,
+    onMode: (ch: Int, mode: String) -> Unit,
+) {
+    // Everything here is appliance-facing. `applianceOn` already inverts the
+    // fail-safe-NC coil state, and the mode buttons send appliance intent that
+    // the ViewModel inverts before it reaches the relay.
+    val on   = relay.applianceOn
+    val mode = relay.mode
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (showChannel) {
+            Text("Relay ${relay.ch}  ·  meter ${relay.ch}",
+                 style = MaterialTheme.typography.labelLarge,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Text("Status", modifier = Modifier.weight(0.4f),
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (on) "ON" else "OFF",
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(0.6f),
+                color = if (on) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            when (mode) {
+                // Relay mode -> what it means for the appliance (inverted).
+                "on"  -> "Manual override: appliance forced OFF (AC cut, ignores schedule)."
+                "off" -> "Manual override: appliance forced ON (ignores schedule)."
+                else  -> "Auto: following the server schedule."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Labels and callbacks are appliance-perspective throughout; the
+            // relay-mode inversion happens in the ViewModel.
+            RelayModeButton("On",   active = mode == "off",  modifier = Modifier.weight(1f)) {
+                onMode(relay.ch, "on")
+            }
+            RelayModeButton("Off",  active = mode == "on",   modifier = Modifier.weight(1f)) {
+                onMode(relay.ch, "off")
+            }
+            RelayModeButton("Auto", active = mode == "auto", modifier = Modifier.weight(1f)) {
+                onMode(relay.ch, "auto")
             }
         }
     }

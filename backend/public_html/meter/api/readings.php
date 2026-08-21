@@ -1,5 +1,5 @@
 <?php
-// GET /api/readings.php?device_id=X&from=ISO&to=ISO&aggregate=raw|hourly|daily|monthly
+// GET /api/readings.php?device_id=X&channel=N&from=ISO&to=ISO&aggregate=raw|hourly|daily|monthly
 // Auth: session (browser/app). Returns JSON.
 //
 // aggregate=daily / monthly compute generated kWh as MAX(energy_wh)-MIN(energy_wh)
@@ -23,6 +23,13 @@ $device_id = (string)($_GET['device_id'] ?? '');
 $aggregate = (string)($_GET['aggregate'] ?? 'raw');
 $from      = (string)($_GET['from'] ?? '');
 $to        = (string)($_GET['to']   ?? '');
+// PZEM channel to report on. A dual-PZEM device stores both meters under one
+// device_id, so EVERY query here must be scoped to a single channel — mixing
+// them would make MAX(energy_wh)-MIN(energy_wh) span two unrelated cumulative
+// counters and produce a meaningless total. Defaults to 1, which is what
+// single-meter devices store, so their behaviour is unchanged.
+$channel   = (int)($_GET['channel'] ?? 1);
+if ($channel < 1) $channel = 1;
 
 if ($device_id === '' || !user_can_see_device($user, $device_id)) {
     json_response(403, ['ok' => false, 'error' => 'no_such_device']);
@@ -52,11 +59,11 @@ $FIVE_MIN_BUCKET = "DATE_ADD(DATE_FORMAT(wall_time, '%Y-%m-%d %H:00:00'), "
                  . "INTERVAL FLOOR(MINUTE(wall_time) / 5) * 5 MINUTE)";
 
 $points = match ($aggregate) {
-    'raw'     => fetch_raw($device_id, $from_str, $to_str),
-    '5min'    => fetch_bucketed($device_id, $from_str, $to_str, $FIVE_MIN_BUCKET),
-    'hourly'  => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d %H:00:00')"),
-    'daily'   => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d 00:00:00')", true),
-    'monthly' => fetch_bucketed($device_id, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')", true),
+    'raw'     => fetch_raw($device_id, $channel, $from_str, $to_str),
+    '5min'    => fetch_bucketed($device_id, $channel, $from_str, $to_str, $FIVE_MIN_BUCKET),
+    'hourly'  => fetch_bucketed($device_id, $channel, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d %H:00:00')"),
+    'daily'   => fetch_bucketed($device_id, $channel, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-%d 00:00:00')", true),
+    'monthly' => fetch_bucketed($device_id, $channel, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')", true),
 };
 
 // Whole-range energy total, in kWh. Normally the PZEM Wh register climbs
@@ -68,17 +75,17 @@ $points = match ($aggregate) {
 $rt = $pdo->prepare(
     'SELECT MIN(energy_wh) AS mn, MAX(energy_wh) AS mx,
             (SELECT energy_wh FROM ed_energy_readings
-               WHERE device_id = ? AND wall_time BETWEEN ? AND ?
+               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
                ORDER BY wall_time ASC, id ASC LIMIT 1) AS fst,
             (SELECT energy_wh FROM ed_energy_readings
-               WHERE device_id = ? AND wall_time BETWEEN ? AND ?
+               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
                ORDER BY wall_time DESC, id DESC LIMIT 1) AS lst
        FROM ed_energy_readings
-      WHERE device_id = ? AND wall_time BETWEEN ? AND ?'
+      WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?'
 );
-$rt->execute([$device_id, $from_str, $to_str,
-              $device_id, $from_str, $to_str,
-              $device_id, $from_str, $to_str]);
+$rt->execute([$device_id, $channel, $from_str, $to_str,
+              $device_id, $channel, $from_str, $to_str,
+              $device_id, $channel, $from_str, $to_str]);
 $row = $rt->fetch();
 if ($row === false || $row['fst'] === null || $row['lst'] === null) {
     $total_kwh = null;
@@ -105,6 +112,7 @@ json_response(200, [
     'from'          => $from_str,
     'to'            => $to_str,
     'aggregate'     => $aggregate,
+    'channel'       => $channel,
     'total_kwh'     => $total_kwh,
     'points'        => $points,
 ]);
@@ -133,16 +141,16 @@ function resolve_range(string $agg, string $from, string $to): array {
     ];
 }
 
-function fetch_raw(string $device, string $from, string $to): array {
+function fetch_raw(string $device, int $channel, string $from, string $to): array {
     $st = db()->prepare(
         'SELECT wall_time, voltage, current_a, power_w, energy_wh, power_factor,
                 frequency_hz, time_confidence
            FROM ed_energy_readings
-          WHERE device_id = ? AND wall_time BETWEEN ? AND ?
+          WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
           ORDER BY wall_time ASC
           LIMIT 5000'
     );
-    $st->execute([$device, $from, $to]);
+    $st->execute([$device, $channel, $from, $to]);
     return array_map(fn($r) => [
         't'    => format_iso($r['wall_time']),
         'V'    => (float)$r['voltage'],
@@ -155,8 +163,8 @@ function fetch_raw(string $device, string $from, string $to): array {
     ], $st->fetchAll());
 }
 
-function fetch_bucketed(string $device, string $from, string $to, string $bucketExpr,
-                       bool $spanToNext = false): array {
+function fetch_bucketed(string $device, int $channel, string $from, string $to,
+                       string $bucketExpr, bool $spanToNext = false): array {
     // Per-bucket: max-min of PZEM cumulative Wh = energy generated in bucket.
     // Plus avg/peak power for context. $bucketExpr is a server-side constant
     // (never user input), so it is safe to interpolate into the SQL text.
@@ -172,12 +180,12 @@ function fetch_bucketed(string $device, string $from, string $to, string $bucket
                 COUNT(*)            AS samples,
                 SUM(time_confidence='approx') AS approx_count
            FROM ed_energy_readings
-          WHERE device_id = ? AND wall_time BETWEEN ? AND ?
+          WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
           GROUP BY bucket
           ORDER BY bucket ASC
           LIMIT 5000"
     );
-    $st->execute([$device, $from, $to]);
+    $st->execute([$device, $channel, $from, $to]);
     $rows = $st->fetchAll();
     $n    = count($rows);
 
