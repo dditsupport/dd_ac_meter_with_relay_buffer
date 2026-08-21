@@ -125,10 +125,41 @@ Relay config is stored and pushed per channel:
   emitted from channel 1, and firmware that receives only those applies them to
   every relay);
 - `/api/admin_relay.php` takes a `channel` parameter (default 1) on
-  `get` / `set` / `clear`;
+  `get` / `set` / `clear`, and the admin Devices page shows a relay picker
+  (hidden on single-relay devices) driven by the device's reported
+  `relay_count`;
+- the dashboard and reports take a `channel` too, with a **Meter** selector that
+  appears only for multi-meter devices;
 - over BLE, write `{"ch":1,"mode":"on"|"off"|"auto"}` to drive one relay —
   omit `ch` to set them all — and reading returns
   `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
+
+### Triple-PZEM build (3 meters, 3 relays)
+
+`esp32.WROOM.DevKit.V1_triple_pzem_ac_energy_meter/` (`FW_VERSION` **3.1.0**)
+uses **all three** of the ESP32's hardware UARTs for meters — ch1 UART2
+(GPIO 16/17), ch2 UART1 (GPIO 32/33), ch3 UART0 (GPIO 3/1) — with relays on
+GPIO 26/27/25.
+
+UART0 is also the flashing port. That is fine for a soldered-down module: the
+programmer is only attached on the bench and PZEM-3 only in the field. The
+*runtime* conflict is the real one, so **`DEBUG_SERIAL` decides who owns UART0,
+and therefore how many meters the build has**:
+
+| `DEBUG_SERIAL` | UART0 | Meters / relays | Use |
+|---|---|---|---|
+| `1` | serial console | 2 + 2 | bench testing |
+| `0` | PZEM-3 Modbus | 3 + 3 | production (no console) |
+
+Coupling the two removes the footgun — logging and Modbus can never share the
+line. With `DEBUG_SERIAL 0` the port is left strictly alone: the `LOG_*` macros
+compile to nothing, `Serial.begin()` is skipped, the serial command console is
+omitted (reading UART0 would *consume* PZEM-3's reply bytes), and
+`log_serial::init()` silences the ESP-IDF's own logging.
+
+Because the firmware reports its live `channel_count`/`relay_count`, the app and
+the cloud follow whichever way it was built — flip the flag, reflash, and both
+ends show 2 or 3 meters with no other change.
 
 ### The device declares its own layout
 

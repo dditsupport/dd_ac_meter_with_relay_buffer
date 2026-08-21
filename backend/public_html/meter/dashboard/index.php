@@ -33,6 +33,24 @@ foreach ($dev_rows as $d) {
     if ($d['device_id'] === $selected) { $selected_meta = $d; break; }
 }
 
+// How many PZEM channels the selected device reports. A multi-meter unit stores
+// each meter's readings under the same device_id with a different `channel`, so
+// the charts MUST be scoped to one of them — the two meters are separate
+// cumulative counters and mixing them makes the kWh totals meaningless.
+// Guarded so a DB without migration 010 still renders the dashboard.
+$channel_count = 1;
+if ($selected !== '') {
+    try {
+        $cs = $pdo->prepare('SELECT channel_count FROM ed_device_meta WHERE device_id = ?');
+        $cs->execute([$selected]);
+        $channel_count = max(1, (int)($cs->fetchColumn() ?: 1));
+    } catch (Throwable $e) {
+        $channel_count = 1;
+    }
+}
+$channel = max(1, (int)($_GET['channel'] ?? 1));
+if ($channel > $channel_count) $channel = 1;
+
 // Last-reported relay state for the selected device (live indicator). Guarded
 // so a DB without migration 003 (relay_* columns) still renders the dashboard.
 $relay_meta = null;
@@ -106,6 +124,17 @@ if ($selected !== '') {
         <?php endforeach; ?>
       </select>
     </label>
+    <?php if ($channel_count > 1): ?>
+    <label>Meter
+      <select name="channel" onchange="this.form.submit()">
+        <?php for ($c = 1; $c <= $channel_count; $c++): ?>
+          <option value="<?= $c ?>" <?= $c === $channel ? 'selected' : '' ?>>
+            Meter <?= $c ?>
+          </option>
+        <?php endfor; ?>
+      </select>
+    </label>
+    <?php endif; ?>
     <div class="range-buttons">
       <button type="button" data-range="today">Today</button>
       <button type="button" data-range="24h">24 h</button>
@@ -153,6 +182,8 @@ if ($selected !== '') {
 
 <script>
 const DEVICE_ID = <?= json_encode($selected) ?>;
+// Every readings query is scoped to one meter; see the channel note above.
+const CHANNEL   = <?= json_encode($channel) ?>;
 // Server timestamps are in APP_TIMEZONE (IST). Anchor parsing to that offset
 // so "X ago" is correct regardless of the viewer's browser time zone.
 const APP_TZ_OFFSET = <?= json_encode(app_tz_offset()) ?>;
@@ -255,7 +286,7 @@ async function loadRange(rangeKey){
   document.getElementById('chart-title').textContent = R.label;
   const from = isoLocal(R.from());
   const readingsUrl = agg =>
-    `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+    `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
     `&aggregate=${agg}&from=${encodeURIComponent(from)}`;
 
   const res = await fetch(readingsUrl(R.aggregate), { credentials: 'same-origin' });
@@ -311,7 +342,7 @@ async function loadRange(rangeKey){
 
 async function loadLive(){
   const from = isoLocal(hoursAgo(1));
-  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=raw&from=${encodeURIComponent(from)}`;
+  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}&aggregate=raw&from=${encodeURIComponent(from)}`;
   let now = null;
   try {
     const res = await fetch(url, { credentials: 'same-origin' });
@@ -333,7 +364,7 @@ async function loadLive(){
   let baseline = 0;
   try {
     const today = isoLocal(startOfToday());
-    const url2 = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&aggregate=hourly&from=${encodeURIComponent(today)}`;
+    const url2 = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}&aggregate=hourly&from=${encodeURIComponent(today)}`;
     const r2 = await (await fetch(url2, { credentials: 'same-origin' })).json();
     baseline = Number(r2.capacity_kw) || 0;
     if (r2.ok) {

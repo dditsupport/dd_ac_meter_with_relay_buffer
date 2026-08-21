@@ -25,6 +25,20 @@ if (!empty($user['is_admin'])) {
 }
 $selected = $_GET['device_id'] ?? ($dev_rows[0]['device_id'] ?? '');
 
+// A multi-meter device stores each meter under the same device_id with a
+// different `channel`, so a report must be scoped to ONE meter — they are
+// separate cumulative counters, and mixing them makes the kWh figures
+// meaningless. The device picker switches client-side, so hand JS the channel
+// count for every device. Guarded: a DB without migration 010 reports 1.
+$channel_counts = [];
+try {
+    foreach ($pdo->query('SELECT device_id, channel_count FROM ed_device_meta') as $m) {
+        $channel_counts[$m['device_id']] = max(1, (int)$m['channel_count']);
+    }
+} catch (Throwable $e) {
+    $channel_counts = [];
+}
+
 // "Today" and the current month, computed in IST so the default ranges line
 // up with how readings are bucketed server-side.
 $today_ist = date('Y-m-d');
@@ -85,6 +99,9 @@ $month_ist = date('Y-m');
         <?php endforeach; ?>
       </select>
     </label>
+    <label id="channel-wrap" hidden>Meter
+      <select id="channel-select"></select>
+    </label>
     <div class="range-buttons">
       <button type="button" data-mode="weekly" class="on">Weekly</button>
       <button type="button" data-mode="monthly">Monthly</button>
@@ -106,6 +123,27 @@ $month_ist = date('Y-m');
 
 <script>
 let DEVICE_ID = <?= json_encode($selected) ?>;
+const CHANNEL_COUNTS = <?= json_encode($channel_counts, JSON_UNESCAPED_SLASHES) ?>;
+let CHANNEL = 1;
+
+const chWrap = document.getElementById('channel-wrap');
+const chSel  = document.getElementById('channel-select');
+
+// Rebuild the meter picker for whichever device is selected. Hidden entirely
+// for single-meter devices so the common case stays uncluttered.
+function syncChannelPicker() {
+  const n = Math.max(1, CHANNEL_COUNTS[DEVICE_ID] || 1);
+  chSel.innerHTML = '';
+  for (let i = 1; i <= n; i++) {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = 'Meter ' + i;
+    chSel.appendChild(o);
+  }
+  CHANNEL = 1;
+  chSel.value = '1';
+  chWrap.hidden = n < 2;
+}
 const TODAY_IST = <?= json_encode($today_ist) ?>;   // YYYY-MM-DD (IST)
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -192,7 +230,7 @@ async function load() {
   document.getElementById('report-title').textContent = R.title;
   document.getElementById('report-sub').textContent   = R.sub;
 
-  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
               `&aggregate=hourly&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   let j;
   try {
@@ -231,7 +269,7 @@ async function load() {
   // MAX-MIN per day) rather than the sum of hourly buckets, so they line up
   // with the dashboard. Pull the daily aggregate for that; the hourly series
   // above still drives the chart lines.
-  const dailyUrl = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}` +
+  const dailyUrl = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
                    `&aggregate=daily&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   const dayTotals = new Map();                   // "YYYY-MM-DD" -> kWh (start->end)
   let rangeTotal = null;                          // whole-period start->end kWh
@@ -303,12 +341,18 @@ document.querySelectorAll('.range-buttons button').forEach(b => {
 });
 document.getElementById('device-select').addEventListener('change', e => {
   DEVICE_ID = e.target.value;
+  syncChannelPicker();   // meter count differs per device
+  load();
+});
+chSel.addEventListener('change', () => {
+  CHANNEL = parseInt(chSel.value, 10) || 1;
   load();
 });
 document.getElementById('month-input').addEventListener('change', () => {
   if (mode === 'monthly') load();
 });
 
+syncChannelPicker();
 load();
 </script>
 <?php endif; ?>
