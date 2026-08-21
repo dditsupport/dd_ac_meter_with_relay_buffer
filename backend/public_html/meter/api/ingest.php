@@ -137,6 +137,42 @@ if ($relay_on !== null || $relay_mode !== null) {
     }
 }
 
+// Per-relay live state. Multi-relay firmware sends a `relays` array; the flat
+// relay_* fields above only ever carry relay 1, so without this relays 2 and 3
+// would be invisible to the dashboard. Single-relay firmware omits the array,
+// in which case we synthesise a channel-1 entry from the flat fields so every
+// device populates this table uniformly.
+$relays_reported = $body['relays'] ?? null;
+if (!is_array($relays_reported) || !$relays_reported) {
+    $relays_reported = ($relay_on !== null || $relay_mode !== null)
+        ? [['ch' => 1, 'on' => $relay_on, 'mode' => $relay_mode]]
+        : [];
+}
+if ($relays_reported) {
+    // Guarded so a DB without migration 012 still ingests readings normally.
+    try {
+        $rst = $pdo->prepare(
+            'INSERT INTO ed_device_relay_state (device_id, channel, relay_on, relay_mode, version, reported_at)
+             VALUES (?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE relay_on    = VALUES(relay_on),
+                                     relay_mode  = VALUES(relay_mode),
+                                     version     = VALUES(version),
+                                     reported_at = NOW()'
+        );
+        foreach ($relays_reported as $rr) {
+            if (!is_array($rr)) continue;
+            $rch = (int)($rr['ch'] ?? 1);
+            if ($rch < 1) $rch = 1;
+            $ron = array_key_exists('on', $rr) && $rr['on'] !== null ? (int)(bool)$rr['on'] : null;
+            $rmd = isset($rr['mode']) ? (string)$rr['mode'] : null;
+            $rvr = (int)($rr['version'] ?? 0);
+            $rst->execute([$device_id, $rch, $ron, $rmd, $rvr]);
+        }
+    } catch (Throwable $e) {
+        // ed_device_relay_state not present yet — ignore.
+    }
+}
+
 // Log the hourly RTC drift. INSERT IGNORE dedups the same measurement resent on
 // every 2-minute POST; the latest is cached on device_meta for the admin list.
 // Guarded so a DB without migration 006 still ingests readings normally.

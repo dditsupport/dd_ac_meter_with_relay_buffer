@@ -134,30 +134,21 @@ const chSel  = document.getElementById('channel-select');
 function syncChannelPicker() {
   const n = Math.max(1, CHANNEL_COUNTS[DEVICE_ID] || 1);
   chSel.innerHTML = '';
-  if (n > 1) {
-    // "All meters" (channel 0) sums every meter, matching the dashboard.
-    const all = document.createElement('option');
-    all.value = '0';
-    all.textContent = 'All meters';
-    chSel.appendChild(all);
-  }
   for (let i = 1; i <= n; i++) {
     const o = document.createElement('option');
     o.value = String(i);
     o.textContent = 'Meter ' + i;
     chSel.appendChild(o);
   }
-  CHANNEL = n > 1 ? 0 : 1;
-  chSel.value = String(CHANNEL);
+  // Deliberately NO "All meters" option here, unlike the dashboard. This chart
+  // already draws one series per DAY, so folding several meters in would either
+  // multiply the lines into an unreadable overlap or silently sum meters that
+  // measure different loads. One meter at a time, picked explicitly.
+  CHANNEL = 1;
+  chSel.value = '1';
   chWrap.hidden = n < 2;
 }
 
-// Channels the current view covers: every meter when CHANNEL is 0, else one.
-function activeChannels() {
-  if (CHANNEL !== 0) return [CHANNEL];
-  const n = Math.max(1, CHANNEL_COUNTS[DEVICE_ID] || 1);
-  return Array.from({ length: n }, (_, i) => i + 1);
-}
 const TODAY_IST = <?= json_encode($today_ist) ?>;   // YYYY-MM-DD (IST)
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -244,34 +235,13 @@ async function load() {
   document.getElementById('report-title').textContent = R.title;
   document.getElementById('report-sub').textContent   = R.sub;
 
-  // This report compares DAYS, so in "All meters" mode the meters are summed
-  // into one site-total series per hour rather than drawn separately — that
-  // keeps one line per day, which is the whole point of the chart.
-  const chans = activeChannels();
+  // Always exactly one meter — the picker offers no combined option, because
+  // this chart's series are already DAYS.
+  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
+              `&aggregate=hourly&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   let j;
   try {
-    const parts = await Promise.all(chans.map(async ch => {
-      const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
-                  `&aggregate=hourly&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
-      return (await fetch(url, { credentials: 'same-origin' })).json();
-    }));
-    const okParts = parts.filter(p => p && p.ok);
-    if (!okParts.length) {
-      j = { ok: false, error: (parts[0] && parts[0].error) || 'failed to load' };
-    } else if (okParts.length === 1) {
-      j = okParts[0];
-    } else {
-      // Merge on timestamp, summing kWh across meters.
-      const merged = new Map();
-      for (const part of okParts) {
-        for (const p of part.points) {
-          const cur = merged.get(p.t);
-          if (cur) cur.kwh = (cur.kwh || 0) + (p.kwh || 0);
-          else     merged.set(p.t, { ...p });
-        }
-      }
-      j = { ok: true, points: [...merged.values()].sort((a, b) => a.t < b.t ? -1 : 1) };
-    }
+    j = await (await fetch(url, { credentials: 'same-origin' })).json();
   } catch (e) { j = { ok: false, error: 'network' }; }
   if (!j.ok) { alert('Error: ' + (j.error || 'failed to load')); return; }
 
@@ -306,22 +276,15 @@ async function load() {
   // MAX-MIN per day) rather than the sum of hourly buckets, so they line up
   // with the dashboard. Pull the daily aggregate for that; the hourly series
   // above still drives the chart lines.
+  const dailyUrl = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
+                   `&aggregate=daily&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   const dayTotals = new Map();                   // "YYYY-MM-DD" -> kWh (start->end)
   let rangeTotal = null;                          // whole-period start->end kWh
   try {
-    const djs = await Promise.all(chans.map(async ch => {
-      const dailyUrl = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
-                       `&aggregate=daily&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
-      return (await fetch(dailyUrl, { credentials: 'same-origin' })).json();
-    }));
-    for (const dj of djs) {
-      if (!dj || !dj.ok) continue;
-      // Energy is additive across meters, so accumulate rather than overwrite.
-      for (const p of dj.points) {
-        const k = p.t.slice(0, 10);
-        dayTotals.set(k, (dayTotals.get(k) || 0) + (p.kwh || 0));
-      }
-      if (typeof dj.total_kwh === 'number') rangeTotal = (rangeTotal || 0) + dj.total_kwh;
+    const dj = await (await fetch(dailyUrl, { credentials: 'same-origin' })).json();
+    if (dj.ok) {
+      for (const p of dj.points) dayTotals.set(p.t.slice(0, 10), p.kwh || 0);
+      if (typeof dj.total_kwh === 'number') rangeTotal = dj.total_kwh;
     }
   } catch (e) { /* fall back to the hourly sum in renderSummary */ }
 

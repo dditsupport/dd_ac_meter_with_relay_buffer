@@ -498,10 +498,33 @@ document.querySelector('.range-buttons button[data-range="today"]').click();
   const dot = el.querySelector('.relay-dot');
   const lbl = el.querySelector('.relay-label');
 
-  function render(st){
+  // A multi-relay device gets one pill per relay. The markup ships with a
+  // single pill (relay 1), so extra ones are cloned from it on first use and
+  // kept in this map keyed by channel.
+  const pills = new Map([[1, { el, dot, lbl }]]);
+
+  function pillFor(ch){
+    if (pills.has(ch)) return pills.get(ch);
+    const clone = el.cloneNode(true);
+    clone.removeAttribute('data-on');
+    el.parentNode.insertBefore(clone, el.nextSibling);
+    const p = {
+      el:  clone,
+      dot: clone.querySelector('.relay-dot'),
+      lbl: clone.querySelector('.relay-label'),
+    };
+    pills.set(ch, p);
+    return p;
+  }
+
+  function render(st, target, ch){
+    const el  = (target || pills.get(1)).el;
+    const dot = (target || pills.get(1)).dot;
+    const lbl = (target || pills.get(1)).lbl;
+    const prefix = ch && pills.size > 1 ? 'R' + ch + ' ' : '';
     const on = st && st.on, at = st && st.at;
     if (st == null || on == null || !at){
-      dot.className = 'relay-dot unknown'; lbl.textContent = '—';
+      dot.className = 'relay-dot unknown'; lbl.textContent = prefix + '—';
       el.title = 'No state reported yet'; return;
     }
     const ageSec = (Date.now() - new Date(at.replace(' ', 'T') + APP_TZ_OFFSET).getTime()) / 1000;
@@ -509,28 +532,41 @@ document.querySelector('.range-buttons button[data-range="today"]').click();
     // NC wiring: relay de-energized = load powered ("Load On"); energized = AC cut.
     const loadOn = !on;
     dot.className = 'relay-dot ' + (stale ? 'stale' : (loadOn ? 'on' : 'off'));
-    let text = loadOn ? 'LOAD ON' : 'AC CUT';
+    let text = prefix + (loadOn ? 'LOAD ON' : 'AC CUT');
     if (st.mode && st.mode !== 'auto') text += ' · forced ' + (st.mode === 'on' ? 'cut' : 'on');
     if (stale) text += ' · stale';
     lbl.textContent = text;
-    el.title = (loadOn ? 'Relay de-energized — load on (AC powered)' : 'Relay energized — AC cut')
+    el.title = (ch ? 'Relay ' + ch + ' (meter ' + ch + '): ' : '')
+             + (loadOn ? 'Relay de-energized — load on (AC powered)' : 'Relay energized — AC cut')
              + ' · reported ' + at + ' IST';
   }
 
-  // Initial paint from the server-rendered data-* attributes.
+  // Initial paint of relay 1 from the server-rendered data-* attributes, so the
+  // pill isn't blank before the first fetch returns.
   render({
     on:       el.dataset.on === '' ? null : el.dataset.on === '1',
     mode:     el.dataset.mode || null,
     at:       el.dataset.at || null,
     interval: parseInt(el.dataset.int || '900', 10),
-  });
+  }, pills.get(1), null);
 
   async function refresh(){
     try {
       const r = await (await fetch(
         `/api/relay_state.php?device_id=${encodeURIComponent(DEVICE_ID)}`,
         { credentials: 'same-origin' })).json();
-      if (r && r.ok) render({ on: r.on, mode: r.mode, at: r.reported_at, interval: r.interval });
+      if (!r || !r.ok) return;
+      // Prefer the per-relay array; fall back to the flat fields for a device
+      // (or DB) that predates it.
+      const list = (Array.isArray(r.relays) && r.relays.length)
+        ? r.relays
+        : [{ ch: 1, on: r.on, mode: r.mode, reported_at: r.reported_at }];
+      const multi = list.length > 1;
+      list.forEach(x => {
+        const ch = Number(x.ch) || 1;
+        render({ on: x.on, mode: x.mode, at: x.reported_at, interval: r.interval },
+               pillFor(ch), multi ? ch : null);
+      });
     } catch (e) { /* keep last paint */ }
   }
   refresh();
