@@ -98,6 +98,9 @@ CREATE TABLE IF NOT EXISTS ed_device_meta (
   -- for the dual-PZEM WROOM build). Lets the dashboard lay out per-channel
   -- views without inferring it from whichever channels happen to have data.
   channel_count    TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  -- How many relays the unit has (one per meter on the dual build). The cloud
+  -- uses this to decide how many per-channel relay schedules to push back.
+  relay_count      TINYINT UNSIGNED NOT NULL DEFAULT 1,
   -- Last relay state the device reported on an ingest POST (live indicator).
   relay_on          TINYINT(1)  NULL,
   relay_mode        VARCHAR(8)  NULL,   -- 'auto' | 'on' | 'off'

@@ -130,6 +130,22 @@ Relay config is stored and pushed per channel:
   omit `ch` to set them all — and reading returns
   `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
 
+### The device declares its own layout
+
+Every build reports `channel_count` and `relay_count` — in the BLE Device Info
+characteristic and in each ingest POST — so nothing has to be configured
+per-device on the other side:
+
+- the **cloud** knows how many per-channel relay schedules are worth pushing
+  (both counts are stored on `ed_device_meta`);
+- the **Android app** renders exactly that many on/off/auto control sets, so
+  one screen serves a 1-relay and a 2-relay meter with no build flavours.
+
+To keep that possible, **all** firmware builds report relay state in the same
+shape — an array — even the single-relay ones, which simply send a one-entry
+`relays[]`. The app reads the array and renders per entry; it never needs to
+know which build it is talking to.
+
 Server side, `/api/readings.php` takes a `channel` parameter (default `1`).
 Scoping every query to one channel is required, not cosmetic — a device's two
 meters are separate cumulative counters, so mixing them would make the

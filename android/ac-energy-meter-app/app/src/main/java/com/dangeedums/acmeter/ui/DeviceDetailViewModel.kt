@@ -52,7 +52,9 @@ data class DeviceDetailUi(
     val connState: ConnState = ConnState.Idle,
     val info: DeviceInfoBle? = null,
     val wifi: com.dangeedums.acmeter.ble.WifiStatus? = null,
-    val relay: com.dangeedums.acmeter.ble.RelayState? = null,
+    // One entry per relay the firmware reports (1 on single-relay builds, 2 on
+    // the dual-PZEM build). The UI renders a control set per entry.
+    val relays: List<com.dangeedums.acmeter.ble.RelayState> = emptyList(),
     val error: String? = null,
     val notice: String? = null,
     val syncStage: SyncStage = SyncStage.Idle,
@@ -196,11 +198,11 @@ class DeviceDetailViewModel(
             .onEach { _ui.value = _ui.value.copy(wifi = it) }
             .catch { /* connection ended; ignore */ }
             .launchIn(viewModelScope)
-        runCatching { gatt.readRelay() }.getOrNull()?.let {
-            _ui.value = _ui.value.copy(relay = it)
+        runCatching { gatt.readRelays() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let {
+            _ui.value = _ui.value.copy(relays = it)
         }
-        gatt.observeRelay()
-            .onEach { _ui.value = _ui.value.copy(relay = it) }
+        gatt.observeRelays()
+            .onEach { if (it.isNotEmpty()) _ui.value = _ui.value.copy(relays = it) }
             .catch { /* connection ended; ignore */ }
             .launchIn(viewModelScope)
     }
@@ -239,16 +241,29 @@ class DeviceDetailViewModel(
         viewModelScope.launch { readInfoNow() }
     }
 
-    /** Manual relay control over BLE. mode = "on" | "off" | "auto". */
-    fun setRelayMode(mode: String) {
+    /**
+     * Set what the APPLIANCE on channel [ch] should do: "on" (powered),
+     * "off" (cut) or "auto" (follow the schedule).
+     *
+     * The relay is wired fail-safe NC, so appliance and relay are inverted:
+     * appliance ON needs the coil DE-energized (relay mode "off") and vice
+     * versa. The inversion lives here so the UI can speak plain appliance
+     * terms and only one place has to know about the wiring.
+     */
+    fun setApplianceMode(ch: Int, applianceMode: String) {
+        val relayMode = when (applianceMode) {
+            "on"  -> "off"   // appliance powered  = relay de-energized
+            "off" -> "on"    // appliance cut      = relay energized
+            else  -> "auto"
+        }
         viewModelScope.launch {
-            runCatching { gatt.writeRelayMode(mode) }
-                .onFailure { _ui.value = _ui.value.copy(error = "relay: ${it.message}") }
+            runCatching { gatt.writeRelayMode(ch, relayMode) }
+                .onFailure { _ui.value = _ui.value.copy(error = "relay $ch: ${it.message}") }
             // The firmware notifies on change, but read back too in case the
             // notification was missed (e.g. mode unchanged).
             kotlinx.coroutines.delay(250)
-            runCatching { gatt.readRelay() }.getOrNull()?.let {
-                _ui.value = _ui.value.copy(relay = it)
+            runCatching { gatt.readRelays() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let {
+                _ui.value = _ui.value.copy(relays = it)
             }
         }
     }

@@ -157,6 +157,8 @@ static String build_device_info_json() {
   // Live per-PZEM figures so the app can show each meter and verify a reset
   // actually took (a channel's total drops to ~0 after a successful reset).
   doc["channel_count"] = pzem::channel_count();
+  // The app renders this many on/off/auto control sets.
+  doc["relay_count"]   = relay::count();
   {
     SharedState snap;
     if (state_snapshot(snap)) {

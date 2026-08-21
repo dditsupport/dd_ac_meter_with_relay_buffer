@@ -46,6 +46,10 @@ $readings    =          $body['readings']      ?? [];
 // Absent on single-meter firmware, which is exactly 1.
 $channel_count = (int)($body['channel_count'] ?? 1);
 if ($channel_count < 1) $channel_count = 1;
+// How many relays the unit has (one per meter on the dual build). Tells the
+// cloud how many per-channel relay schedules are worth pushing back.
+$relay_count = (int)($body['relay_count'] ?? 1);
+if ($relay_count < 1) $relay_count = 1;
 
 // Device-reported relay state (optional) for the live admin indicator.
 $relay_on    = array_key_exists('relay_on', $body) ? (int)(bool)$body['relay_on'] : null;
@@ -103,12 +107,13 @@ try {
 // ingests normally — same pattern as the relay/RTC columns below.
 try {
     $pdo->prepare(
-        'INSERT INTO ed_device_meta (device_id, fw_version, channel_count, last_sync_at)
-         VALUES (?, ?, ?, NOW())
+        'INSERT INTO ed_device_meta (device_id, fw_version, channel_count, relay_count, last_sync_at)
+         VALUES (?, ?, ?, ?, NOW())
          ON DUPLICATE KEY UPDATE fw_version = VALUES(fw_version),
                                  channel_count = VALUES(channel_count),
+                                 relay_count = VALUES(relay_count),
                                  last_sync_at = NOW()'
-    )->execute([$device_id, $fw_version, $channel_count]);
+    )->execute([$device_id, $fw_version, $channel_count, $relay_count]);
 } catch (Throwable $e) {
     $pdo->prepare(
         'INSERT INTO ed_device_meta (device_id, fw_version, last_sync_at)

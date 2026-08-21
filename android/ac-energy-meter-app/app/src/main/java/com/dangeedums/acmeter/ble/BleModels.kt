@@ -22,6 +22,10 @@ data class DeviceInfoBle(
     @SerialName("ingest_path")        val ingestPath: String = "",
     @SerialName("log_interval_sec")   val logIntervalSec: Int = 900,
     @SerialName("total_kwh")          val totalKwh: Double? = null,
+    // How many PZEM meters and relays the connected firmware has. The device
+    // tells us, so one screen serves both the 1-relay and 2-relay builds.
+    @SerialName("channel_count")      val channelCount: Int = 1,
+    @SerialName("relay_count")        val relayCount: Int = 1,
 )
 
 @Serializable
@@ -41,14 +45,34 @@ data class WifiScanResult(
 }
 
 /**
- * Relay characteristic shape: {"mode":"auto","on":false,"sched_version":3}.
- * `mode` is "auto" | "on" | "off". Keep in sync with relay::status_json().
+ * One relay's state. Every firmware build — 1-relay or 2-relay — reports an
+ * ARRAY of these, so the UI just renders one control set per entry.
+ *
+ * `energized` is the raw coil state and means **AC CUT**, because the relay is
+ * wired fail-safe NC. The appliance is powered when [energized] is false; use
+ * [applianceOn] rather than reading the flag directly.
+ *
+ * Keep in sync with relay::status_json().
  */
 @Serializable
 data class RelayState(
+    val ch: Int = 1,
     val mode: String = "auto",
-    val on: Boolean = false,
+    val energized: Boolean = false,
+    val sm: String = "",
+    @SerialName("latest_w")      val latestW: Int = -1,
+    @SerialName("compressor_w")  val compressorW: Int = 0,
+    @SerialName("grace_min")     val graceMin: Int = 0,
     @SerialName("sched_version") val schedVersion: Int = 0,
+) {
+    /** True when the appliance has power (relay de-energized). */
+    val applianceOn: Boolean get() = !energized
+}
+
+/** Relay characteristic shape: {"relays":[{...},{...}]} — one entry per relay. */
+@Serializable
+data class RelayStatus(
+    val relays: List<RelayState> = emptyList(),
 )
 
 /**

@@ -28,3 +28,13 @@ SET @sql := IF(@pk = 1,
     'ALTER TABLE ed_device_relay_schedule DROP PRIMARY KEY, ADD PRIMARY KEY (device_id, channel)',
     'DO 0 /* primary key already (device_id, channel) */');
 PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- ---- ed_device_meta.relay_count (how many relays the unit has) ----
+SET @c := (SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+              AND table_name   = 'ed_device_meta'
+              AND column_name  = 'relay_count');
+SET @sql := IF(@c = 0,
+    'ALTER TABLE ed_device_meta ADD COLUMN relay_count TINYINT UNSIGNED NOT NULL DEFAULT 1 AFTER channel_count',
+    'DO 0 /* relay_count already present */');
+PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;

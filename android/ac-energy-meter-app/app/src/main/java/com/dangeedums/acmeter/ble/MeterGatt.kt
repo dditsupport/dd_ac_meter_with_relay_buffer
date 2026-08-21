@@ -114,21 +114,29 @@ class MeterGatt(
         else json.decodeFromString(WifiStatus.serializer(), text)
     }.getOrNull()
 
-    /** Current relay state, or null if the char is empty / unparseable. */
-    suspend fun readRelay(): RelayState? = runCatching {
+    /** State of every relay, or an empty list if the char is empty/unparseable. */
+    suspend fun readRelays(): List<RelayState> = runCatching {
         val text = peripheral.read(RELAY_CHAR).decodeToString()
-        if (text.isBlank()) null
-        else json.decodeFromString(RelayState.serializer(), text)
-    }.getOrNull()
+        if (text.isBlank()) emptyList()
+        else json.decodeFromString(RelayStatus.serializer(), text).relays
+    }.getOrDefault(emptyList())
 
     /** Live relay-state pushes (schedule- or override-driven) from the device. */
-    fun observeRelay(): Flow<RelayState> = peripheral.observe(RELAY_CHAR).map {
-        json.decodeFromString(RelayState.serializer(), it.decodeToString())
+    fun observeRelays(): Flow<List<RelayState>> = peripheral.observe(RELAY_CHAR).map {
+        json.decodeFromString(RelayStatus.serializer(), it.decodeToString()).relays
     }
 
-    /** Manual relay control. mode = "on" | "off" | "auto" (follow schedule). */
-    suspend fun writeRelayMode(mode: String) {
-        peripheral.write(RELAY_CHAR, """{"mode":"$mode"}""".toByteArray(), WriteType.WithResponse)
+    /**
+     * Manual control of ONE relay. [ch] is the 1-based relay/PZEM channel;
+     * mode = "on" | "off" | "auto" (follow schedule).
+     *
+     * NOTE: these are RELAY modes, not appliance states — the relay is wired
+     * fail-safe NC, so "on" energizes the coil and CUTS the appliance. Callers
+     * that present appliance-facing buttons must invert before calling.
+     */
+    suspend fun writeRelayMode(ch: Int, mode: String) {
+        peripheral.write(RELAY_CHAR, """{"ch":$ch,"mode":"$mode"}""".toByteArray(),
+            WriteType.WithResponse)
     }
 
     /** Zero the PZEM cumulative energy register. The firmware requires this exact
