@@ -133,8 +133,12 @@ Relay config is stored and pushed per channel:
   (`channel=0`), which queries every meter and overlays them — one colour-coded
   series per meter on both charts, a per-meter breakdown row, and combined
   Current / Today / Peak / Period-total cards. Picking a single meter narrows to
-  that one. Reports sum the meters into a site total instead of overlaying, so
-  the day-vs-day chart keeps one line per day;
+  that one. Reports instead offer **one meter at a time** with no combined
+  option — that chart's series are already days, so folding meters in would
+  multiply the lines or silently sum unrelated loads;
+- the live relay indicator shows **one pill per relay** (`R1 LOAD ON`,
+  `R2 AC CUT`, …), backed by a new `ed_device_relay_state` table keyed
+  `(device_id, channel)` that ingest refreshes from the POST's `relays[]`;
 - over BLE, write `{"ch":1,"mode":"on"|"off"|"auto"}` to drive one relay —
   omit `ch` to set them all — and reading returns
   `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
