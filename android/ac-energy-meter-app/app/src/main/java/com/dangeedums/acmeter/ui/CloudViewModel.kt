@@ -36,6 +36,10 @@ data class CloudUi(
     val baseUrl: String = "https://ac.aromen.biz",
     val devices: List<CloudDevice> = emptyList(),
     val selectedDeviceId: String? = null,
+    /** 1-based meter being charted. A multi-meter device is viewed one meter at
+     *  a time — its meters are separate cumulative counters measuring different
+     *  loads, so combining them into one chart would be misleading. */
+    val selectedChannel: Int = 1,
     val range: Range = Range.Today,
     val points: List<ReadingPoint> = emptyList(),
     val loading: Boolean = false,
@@ -168,7 +172,9 @@ class CloudViewModel(
     }
 
     fun selectDevice(id: String) {
-        _ui.value = _ui.value.copy(selectedDeviceId = id)
+        // Reset to meter 1: the previously-selected channel may not exist on the
+        // newly-picked device.
+        _ui.value = _ui.value.copy(selectedDeviceId = id, selectedChannel = 1)
         refreshChart()
     }
 
@@ -177,8 +183,16 @@ class CloudViewModel(
         refreshChart()
     }
 
+    /** Switch which meter the chart shows (1-based). */
+    fun selectChannel(ch: Int) {
+        if (ch == _ui.value.selectedChannel) return
+        _ui.value = _ui.value.copy(selectedChannel = ch)
+        refreshChart()
+    }
+
     fun refreshChart() {
         val dev = _ui.value.selectedDeviceId ?: return
+        val ch  = _ui.value.selectedChannel
         val r   = _ui.value.range
         val fromIso = when (r) {
             Range.Today   -> LocalDate.now().atStartOfDay().format(LocalIso)
@@ -189,7 +203,7 @@ class CloudViewModel(
         }
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
-            runCatching { client.readings(dev, r.aggregate, fromIso = fromIso) }
+            runCatching { client.readings(dev, r.aggregate, fromIso = fromIso, channel = ch) }
                 .onSuccess { resp ->
                     _ui.value = _ui.value.copy(
                         loading = false,

@@ -175,6 +175,24 @@ CREATE TABLE IF NOT EXISTS ed_ingest_log (
   KEY idx_device_time (device_id, received_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ---------------- ed_device_relay_state ----------------
+-- Last-reported live state of EACH relay, refreshed on every ingest POST and
+-- used by the dashboard/admin indicators. Kept separate from
+-- ed_device_relay_schedule because a relay reports state whether or not anyone
+-- has configured a schedule for it — storing state on the schedule row would
+-- either lose it or fabricate empty schedule rows.
+CREATE TABLE IF NOT EXISTS ed_device_relay_state (
+  device_id   VARCHAR(32)      NOT NULL,
+  channel     TINYINT UNSIGNED NOT NULL DEFAULT 1,   -- 1-based relay/PZEM channel
+  relay_on    TINYINT(1)       NULL,                 -- true = energized = AC cut
+  relay_mode  VARCHAR(8)       NULL,                 -- 'auto' | 'on' | 'off'
+  version     INT UNSIGNED     NOT NULL DEFAULT 0,   -- schedule version the relay is running
+  reported_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
+                               ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (device_id, channel),
+  FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- ---------------- ed_device_relay_schedule ----------------
 -- Per-device relay config for the off-hours AC cutoff. The firmware fetches
 -- this in every ingest.php response and drives the relay accordingly.

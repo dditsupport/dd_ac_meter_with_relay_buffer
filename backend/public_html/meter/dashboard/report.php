@@ -140,10 +140,15 @@ function syncChannelPicker() {
     o.textContent = 'Meter ' + i;
     chSel.appendChild(o);
   }
+  // Deliberately NO "All meters" option here, unlike the dashboard. This chart
+  // already draws one series per DAY, so folding several meters in would either
+  // multiply the lines into an unreadable overlap or silently sum meters that
+  // measure different loads. One meter at a time, picked explicitly.
   CHANNEL = 1;
   chSel.value = '1';
   chWrap.hidden = n < 2;
 }
+
 const TODAY_IST = <?= json_encode($today_ist) ?>;   // YYYY-MM-DD (IST)
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -230,6 +235,8 @@ async function load() {
   document.getElementById('report-title').textContent = R.title;
   document.getElementById('report-sub').textContent   = R.sub;
 
+  // Always exactly one meter — the picker offers no combined option, because
+  // this chart's series are already DAYS.
   const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
               `&aggregate=hourly&from=${encodeURIComponent(R.from)}&to=${encodeURIComponent(R.to)}`;
   let j;

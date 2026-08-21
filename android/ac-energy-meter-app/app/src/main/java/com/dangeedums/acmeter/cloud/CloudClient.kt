@@ -149,14 +149,21 @@ class CloudClient(
      * @param aggregate one of "raw", "hourly", "daily", "monthly"
      * @param fromIso optional ISO-8601 local time (omit for endpoint default)
      */
+    /**
+     * [channel] is the 1-based PZEM meter. A multi-meter device stores each
+     * meter under the same device_id, and they are separate cumulative
+     * counters — so a query must name one, or the kWh totals are meaningless.
+     */
     suspend fun readings(
         deviceId: String,
         aggregate: String,
         fromIso: String? = null,
         toIso: String? = null,
+        channel: Int = 1,
     ): ReadingsResponse = http.get("$baseUrl/api/readings.php") {
         parameter("device_id", deviceId)
         parameter("aggregate", aggregate)
+        parameter("channel", channel)
         if (fromIso != null) parameter("from", fromIso)
         if (toIso   != null) parameter("to", toIso)
     }.body()

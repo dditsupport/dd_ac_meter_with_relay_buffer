@@ -62,6 +62,10 @@ data class CloudDevice(
     val last_boot_id: Int? = null,
     val total_readings: Long? = null,
     val log_interval_sec: Int? = null,
+    /** How many PZEM meters / relays the unit reports. Defaults to 1 so a
+     *  pre-migration server (which omits them) behaves as single-meter. */
+    val channel_count: Int = 1,
+    val relay_count: Int = 1,
     /** BLE access PIN for this device. Cached locally to gate BLE access. */
     val ble_pin: String? = null,
 )
@@ -86,6 +90,8 @@ data class ReadingsResponse(
     val from: String? = null,
     val to: String? = null,
     val aggregate: String? = null,
+    /** Which meter these points belong to (1-based). */
+    val channel: Int = 1,
     val points: List<ReadingPoint> = emptyList(),
     val error: String? = null,
 )

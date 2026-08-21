@@ -169,6 +169,10 @@ if ($selected !== '') {
     <div class="stat"><span>Period total</span><div class="stat-val"><b id="stat-total">—</b><i>kWh</i></div></div>
   </section>
 
+  <!-- Per-meter breakdown. Populated only in "All meters" mode, where the four
+       cards above show the COMBINED figures across every meter. -->
+  <section class="cards stats" id="per-meter" hidden></section>
+
   <section class="card">
     <h2 id="chart-title">Energy</h2>
     <canvas id="chart-energy" height="120"></canvas>
@@ -183,7 +187,20 @@ if ($selected !== '') {
 <script>
 const DEVICE_ID = <?= json_encode($selected) ?>;
 // Every readings query is scoped to one meter; see the channel note above.
-const CHANNEL   = <?= json_encode($channel) ?>;
+const CHANNEL       = <?= json_encode($channel) ?>;   // 0 = all meters
+const CHANNEL_COUNT = <?= json_encode($channel_count) ?>;
+// Channels this view covers: every meter in "All meters" mode, else just one.
+const CHANNELS = CHANNEL === 0
+  ? Array.from({ length: CHANNEL_COUNT }, (_, i) => i + 1)
+  : [CHANNEL];
+const MULTI = CHANNELS.length > 1;
+// One colour per meter, reused by both charts so a meter reads the same in each.
+const CH_COLOURS = [
+  { line: '#1f6e2a', fill: 'rgba(31,110,42,0.7)'  },
+  { line: '#c97a1a', fill: 'rgba(201,122,26,0.7)' },
+  { line: '#1a5fa8', fill: 'rgba(26,95,168,0.7)'  },
+];
+const chColour = ch => CH_COLOURS[(ch - 1) % CH_COLOURS.length];
 // Server timestamps are in APP_TIMEZONE (IST). Anchor parsing to that offset
 // so "X ago" is correct regardless of the viewer's browser time zone.
 const APP_TZ_OFFSET = <?= json_encode(app_tz_offset()) ?>;
@@ -256,7 +273,7 @@ const endpointLabelsPlugin = {
   },
 };
 
-function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints){
+function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showLegend){
   const ctx = document.getElementById(canvasId).getContext('2d');
   const x = {
     type: 'time',
@@ -276,7 +293,9 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints){
         x,
         y: { beginAtZero: true, title: { display: true, text: yLabel } },
       },
-      plugins: { legend: { display: false } },
+      // A legend only earns its space when more than one meter is plotted;
+      // with a single series the chart title already says what it is.
+      plugins: { legend: { display: !!showLegend, position: 'bottom' } },
     },
   });
 }
@@ -285,26 +304,37 @@ async function loadRange(rangeKey){
   const R = RANGES[rangeKey];
   document.getElementById('chart-title').textContent = R.label;
   const from = isoLocal(R.from());
-  const readingsUrl = agg =>
-    `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}` +
+  const readingsUrl = (agg, ch) =>
+    `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
     `&aggregate=${agg}&from=${encodeURIComponent(from)}`;
 
-  const res = await fetch(readingsUrl(R.aggregate), { credentials: 'same-origin' });
-  const j   = await res.json();
-  if (!j.ok) { alert('Error: ' + j.error); return; }
+  // One request per meter. Each channel is a separate cumulative counter, so
+  // they must be queried (and totalled) separately — the server cannot mix
+  // them into one series without making the kWh figures meaningless.
+  const per = await Promise.all(CHANNELS.map(async ch => {
+    const j = await (await fetch(readingsUrl(R.aggregate, ch), { credentials: 'same-origin' })).json();
+    if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0 };
 
-  const energyPoints = j.points.map(p => ({ t: p.t, y: p.kwh, s: p.kwh_start, e: p.kwh_end }));
+    const energy = j.points.map(p => ({ t: p.t, y: p.kwh, s: p.kwh_start, e: p.kwh_end }));
 
-  // The Watt line can be finer-grained than the energy bars. When a distinct
-  // powerAggregate is set, pull the power series from its own request so short
-  // ranges plot every posted reading instead of an hourly average.
-  let powerPoints = j.points.map(p => ({ t: p.t, y: p.P_avg }));
-  if (R.powerAggregate && R.powerAggregate !== R.aggregate) {
-    try {
-      const pr = await (await fetch(readingsUrl(R.powerAggregate), { credentials: 'same-origin' })).json();
-      if (pr.ok) powerPoints = pr.points.map(p => ({ t: p.t, y: p.P_avg }));
-    } catch (e) { /* keep the hourly power series on error */ }
-  }
+    // The Watt line can be finer-grained than the energy bars. When a distinct
+    // powerAggregate is set, pull the power series from its own request so
+    // short ranges plot every posted reading instead of an hourly average.
+    let power = j.points.map(p => ({ t: p.t, y: p.P_avg }));
+    if (R.powerAggregate && R.powerAggregate !== R.aggregate) {
+      try {
+        const pr = await (await fetch(readingsUrl(R.powerAggregate, ch), { credentials: 'same-origin' })).json();
+        if (pr.ok) power = pr.points.map(p => ({ t: p.t, y: p.P_avg }));
+      } catch (e) { /* keep the coarser power series on error */ }
+    }
+
+    const total = typeof j.total_kwh === 'number'
+      ? j.total_kwh
+      : energy.reduce((a, p) => a + (p.y || 0), 0);
+    return { ch, ok: true, energy, power, total, baseline: Number(j.capacity_kw) || 0 };
+  }));
+
+  if (!per.some(r => r.ok)) { alert('Error loading readings'); return; }
 
   if (energyChart) energyChart.destroy();
   if (powerChart)  powerChart.destroy();
@@ -313,28 +343,57 @@ async function loadRange(rangeKey){
     min:  R.xMin ? R.xMin() : null,
     max:  R.xMax ? R.xMax() : null,
   };
-  energyChart = makeChart('chart-energy', 'bar', [{
-    label: R.energyLabel, data: energyPoints, backgroundColor: 'rgba(31,110,42,0.7)',
-  }], R.energyLabel, xOpts, true);
-  powerChart = makeChart('chart-power', 'line', [{
-    label: 'Avg power (W)', data: powerPoints, borderColor: '#c97a1a', tension: 0.25,
-  }], 'W', xOpts, false);
+  // One dataset per meter, colour-matched across both charts. The start/end
+  // endpoint labels are only drawn for a single series — with several meters
+  // overlaid they would collide into unreadable clutter.
+  energyChart = makeChart('chart-energy', 'bar', per.map(r => ({
+    label: MULTI ? `Meter ${r.ch}` : R.energyLabel,
+    data: r.energy,
+    backgroundColor: MULTI ? chColour(r.ch).fill : 'rgba(31,110,42,0.7)',
+  })), R.energyLabel, xOpts, !MULTI, MULTI);
+  powerChart = makeChart('chart-power', 'line', per.map(r => ({
+    label: MULTI ? `Meter ${r.ch}` : 'Avg power (W)',
+    data: r.power,
+    borderColor: MULTI ? chColour(r.ch).line : '#c97a1a',
+    tension: 0.25,
+  })), 'W', xOpts, false, MULTI);
 
-  // Stats. capacity_kw is repurposed as the old meter's last reading (kWh) at
-  // install; add it so Period total continues from the replaced meter.
-  const baseline = Number(j.capacity_kw) || 0;
-  // Period total is the range's single start->end meter difference (server
-  // total_kwh, one MAX-MIN over the whole window) — for the Today range that's
-  // today's first reading to the current last reading, one big delta capturing
-  // everything. This is used for every range; summing the bars would drop the
-  // energy accrued in the gaps between buckets. Fall back to the bar sum only
-  // if the server didn't return a total.
-  const periodTotal = typeof j.total_kwh === 'number'
-    ? j.total_kwh
-    : energyPoints.reduce((a, p) => a + (p.y || 0), 0);
-  const peakP = powerPoints.reduce((m, p) => Math.max(m, p.y || 0), 0);
-  document.getElementById('stat-total').textContent = (periodTotal + baseline).toFixed(2);
+  // Stats. Period total is each range's single start->end meter difference
+  // (server total_kwh, one MAX-MIN over the whole window) rather than a sum of
+  // the bars, which would drop the energy accrued in the gaps between buckets.
+  // capacity_kw is repurposed as the old meter's last reading (kWh) at install,
+  // so it is added on to continue from the meter this device replaced.
+  //
+  // Across meters these are SUMMED for the combined cards: total energy is
+  // additive, and peak is the highest instantaneous draw seen on any meter.
+  // The install baseline (capacity_kw, repurposed as the replaced meter's last
+  // reading) belongs to the DEVICE, so it is added ONCE — summing it per channel
+  // would multiply it by the meter count.
+  const baseline = per.reduce((b, r) => b || r.baseline, 0);
+  const periodTotal = per.reduce((a, r) => a + r.total, 0) + baseline;
+  const peakP = per.reduce((m, r) =>
+    Math.max(m, r.power.reduce((n, p) => Math.max(n, p.y || 0), 0)), 0);
+  document.getElementById('stat-total').textContent = periodTotal.toFixed(2);
   document.getElementById('stat-peak').textContent  = peakP.toFixed(0);
+
+  // Per-meter breakdown row (All-meters mode only).
+  const pmEl = document.getElementById('per-meter');
+  pmEl.hidden = !MULTI;
+  if (MULTI) {
+    pmEl.innerHTML = '';
+    per.forEach(r => {
+      const peak = r.power.reduce((n, p) => Math.max(n, p.y || 0), 0);
+      const d = document.createElement('div');
+      d.className = 'stat';
+      d.dataset.ch = String(r.ch);   // loadLive() fills in the live watts below
+      d.innerHTML =
+        `<span style="color:${chColour(r.ch).line}">\u25CF Meter ${r.ch}</span>` +
+        `<div class="stat-val"><b>${r.total.toFixed(2)}</b><i>kWh</i></div>` +
+        `<div class="muted" style="font-size:0.8rem">` +
+        `<span class="live-w">— W now</span> · peak ${peak.toFixed(0)} W</div>`;
+      pmEl.appendChild(d);
+    });
+  }
 
   // "Today" + "Current" come from a raw query of the last hour
   loadLive();
@@ -342,18 +401,36 @@ async function loadRange(rangeKey){
 
 async function loadLive(){
   const from = isoLocal(hoursAgo(1));
-  const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}&aggregate=raw&from=${encodeURIComponent(from)}`;
+  // "Current" is the sum of each meter's latest reading — the site's live draw.
+  // Queried per channel because each meter is its own counter.
   let now = null;
+  const nowPer = new Map();
   try {
-    const res = await fetch(url, { credentials: 'same-origin' });
-    const j   = await res.json();
-    if (j.ok && j.points.length) {
+    const results = await Promise.all(CHANNELS.map(async ch => {
+      const url = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
+                  `&aggregate=raw&from=${encodeURIComponent(from)}`;
+      const j = await (await fetch(url, { credentials: 'same-origin' })).json();
+      if (!j.ok || !j.points.length) return null;
       const p = j.points[j.points.length-1];
-      if (typeof p.P === 'number') now = p.P;
-    }
+      return typeof p.P === 'number' ? { ch, P: p.P } : null;
+    }));
+    results.filter(Boolean).forEach(r => {
+      now = (now || 0) + r.P;
+      nowPer.set(r.ch, r.P);
+    });
   } catch (e) { /* network/parse error — fall through to dash */ }
   document.getElementById('stat-now').textContent =
     now === null ? '—' : now.toFixed(0);
+
+  // Annotate the per-meter cards with each meter's own live draw.
+  if (MULTI) {
+    document.querySelectorAll('#per-meter .stat[data-ch]').forEach(el => {
+      const ch = Number(el.dataset.ch);
+      const w  = nowPer.has(ch) ? nowPer.get(ch).toFixed(0) + ' W now' : '— W now';
+      const liveEl = el.querySelector('.live-w');
+      if (liveEl) liveEl.textContent = w;
+    });
+  }
 
   // Today kWh as the sum of today's per-hour deltas (each hourly bucket's own
   // max-min), so it matches the hourly bars on the chart. The Period total card
@@ -364,12 +441,18 @@ async function loadLive(){
   let baseline = 0;
   try {
     const today = isoLocal(startOfToday());
-    const url2 = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${CHANNEL}&aggregate=hourly&from=${encodeURIComponent(today)}`;
-    const r2 = await (await fetch(url2, { credentials: 'same-origin' })).json();
-    baseline = Number(r2.capacity_kw) || 0;
-    if (r2.ok) {
-      today_kwh = r2.points.reduce((a, p) => a + (p.kwh || 0), 0);
-    }
+    const rows = await Promise.all(CHANNELS.map(async ch => {
+      const url2 = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
+                   `&aggregate=hourly&from=${encodeURIComponent(today)}`;
+      return (await fetch(url2, { credentials: 'same-origin' })).json();
+    }));
+    // The install baseline is a property of the DEVICE, not of each meter, so
+    // it is taken once rather than added per channel (which would multiply it).
+    const withCap = rows.find(r => r && Number(r.capacity_kw));
+    baseline = withCap ? Number(withCap.capacity_kw) : 0;
+    rows.filter(r => r && r.ok).forEach(r => {
+      today_kwh = (today_kwh || 0) + r.points.reduce((a, p) => a + (p.kwh || 0), 0);
+    });
   } catch (e) { /* fall through */ }
   document.getElementById('stat-today').textContent =
     today_kwh === null ? '—' : (today_kwh + baseline).toFixed(2);
@@ -415,10 +498,33 @@ document.querySelector('.range-buttons button[data-range="today"]').click();
   const dot = el.querySelector('.relay-dot');
   const lbl = el.querySelector('.relay-label');
 
-  function render(st){
+  // A multi-relay device gets one pill per relay. The markup ships with a
+  // single pill (relay 1), so extra ones are cloned from it on first use and
+  // kept in this map keyed by channel.
+  const pills = new Map([[1, { el, dot, lbl }]]);
+
+  function pillFor(ch){
+    if (pills.has(ch)) return pills.get(ch);
+    const clone = el.cloneNode(true);
+    clone.removeAttribute('data-on');
+    el.parentNode.insertBefore(clone, el.nextSibling);
+    const p = {
+      el:  clone,
+      dot: clone.querySelector('.relay-dot'),
+      lbl: clone.querySelector('.relay-label'),
+    };
+    pills.set(ch, p);
+    return p;
+  }
+
+  function render(st, target, ch){
+    const el  = (target || pills.get(1)).el;
+    const dot = (target || pills.get(1)).dot;
+    const lbl = (target || pills.get(1)).lbl;
+    const prefix = ch && pills.size > 1 ? 'R' + ch + ' ' : '';
     const on = st && st.on, at = st && st.at;
     if (st == null || on == null || !at){
-      dot.className = 'relay-dot unknown'; lbl.textContent = '—';
+      dot.className = 'relay-dot unknown'; lbl.textContent = prefix + '—';
       el.title = 'No state reported yet'; return;
     }
     const ageSec = (Date.now() - new Date(at.replace(' ', 'T') + APP_TZ_OFFSET).getTime()) / 1000;
@@ -426,28 +532,41 @@ document.querySelector('.range-buttons button[data-range="today"]').click();
     // NC wiring: relay de-energized = load powered ("Load On"); energized = AC cut.
     const loadOn = !on;
     dot.className = 'relay-dot ' + (stale ? 'stale' : (loadOn ? 'on' : 'off'));
-    let text = loadOn ? 'LOAD ON' : 'AC CUT';
+    let text = prefix + (loadOn ? 'LOAD ON' : 'AC CUT');
     if (st.mode && st.mode !== 'auto') text += ' · forced ' + (st.mode === 'on' ? 'cut' : 'on');
     if (stale) text += ' · stale';
     lbl.textContent = text;
-    el.title = (loadOn ? 'Relay de-energized — load on (AC powered)' : 'Relay energized — AC cut')
+    el.title = (ch ? 'Relay ' + ch + ' (meter ' + ch + '): ' : '')
+             + (loadOn ? 'Relay de-energized — load on (AC powered)' : 'Relay energized — AC cut')
              + ' · reported ' + at + ' IST';
   }
 
-  // Initial paint from the server-rendered data-* attributes.
+  // Initial paint of relay 1 from the server-rendered data-* attributes, so the
+  // pill isn't blank before the first fetch returns.
   render({
     on:       el.dataset.on === '' ? null : el.dataset.on === '1',
     mode:     el.dataset.mode || null,
     at:       el.dataset.at || null,
     interval: parseInt(el.dataset.int || '900', 10),
-  });
+  }, pills.get(1), null);
 
   async function refresh(){
     try {
       const r = await (await fetch(
         `/api/relay_state.php?device_id=${encodeURIComponent(DEVICE_ID)}`,
         { credentials: 'same-origin' })).json();
-      if (r && r.ok) render({ on: r.on, mode: r.mode, at: r.reported_at, interval: r.interval });
+      if (!r || !r.ok) return;
+      // Prefer the per-relay array; fall back to the flat fields for a device
+      // (or DB) that predates it.
+      const list = (Array.isArray(r.relays) && r.relays.length)
+        ? r.relays
+        : [{ ch: 1, on: r.on, mode: r.mode, reported_at: r.reported_at }];
+      const multi = list.length > 1;
+      list.forEach(x => {
+        const ch = Number(x.ch) || 1;
+        render({ on: x.on, mode: x.mode, at: x.reported_at, interval: r.interval },
+               pillFor(ch), multi ? ch : null);
+      });
     } catch (e) { /* keep last paint */ }
   }
   refresh();
