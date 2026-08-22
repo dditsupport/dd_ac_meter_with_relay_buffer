@@ -35,9 +35,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dangeedums.acmeter.ble.WifiScanResult
 
@@ -95,7 +100,24 @@ fun WifiConfigScreen(vm: WifiConfigViewModel, onBack: () -> Unit) {
         OutlinedTextField(
             value = ui.password,
             onValueChange = vm::setPassword,
-            label = { Text("Password (leave blank for open network)") },
+            label = {
+                // At the full label size this string wrapped, which is what made
+                // the field two rows tall. The hint rides along at 0.7em — a
+                // size relative to the label, not a fixed sp — so it keeps
+                // shrinking in step with "Password" when the label floats up on
+                // focus. A fixed size would leave the hint full-size against a
+                // shrunken label.
+                Text(
+                    buildAnnotatedString {
+                        append("Password")
+                        withStyle(SpanStyle(fontSize = 0.7.em)) {
+                            append(" (leave blank for open network)")
+                        }
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
