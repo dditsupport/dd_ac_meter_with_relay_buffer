@@ -157,7 +157,7 @@ All require a session cookie (`meter_sess`) from POST `/api/login.php`.
 | GET | `/api/readings.php` | session | data points; query params: `device_id`, `from`, `to`, `aggregate=raw\|hourly\|daily\|monthly` |
 | GET | `/api/relay_state.php` | session | last-reported relay state of a device: `device_id` → `{on, mode, reported_at, interval}` |
 | POST | `/api/admin_users.php` | admin | `action=list\|create\|set_password\|set_admin\|delete` (CSRF) |
-| POST | `/api/admin_devices.php` | admin | `action=list\|bind\|rename\|set_interval\|delete` (CSRF) |
+| POST | `/api/admin_devices.php` | admin | `action=list\|bind\|rename\|set_interval\|regen_pin\|set_pin\|delete` (CSRF). `regen_pin` rolls a random 6-digit BLE PIN, `set_pin` stores a specific one |
 | POST | `/api/admin_relay.php` | admin | `action=get\|set\|clear` per-device AC-cutoff config (open-hours schedule + `compressor_watts` + `grace_min`), `action=states` live relay state of all devices (CSRF) |
 
 ### Pages

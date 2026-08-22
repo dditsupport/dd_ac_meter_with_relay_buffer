@@ -4,7 +4,8 @@
 //   action=bind           -> assign owner_user_id to a device (or null to unbind)
 //   action=rename         -> set friendly_name / location / capacity_kw / notes
 //   action=set_interval   -> override ed_device_meta.log_interval_sec (0 = use default)
-//   action=regen_pin      -> generate a new BLE access PIN, returns it
+//   action=regen_pin      -> generate a new random BLE access PIN, returns it
+//   action=set_pin        -> set a specific BLE access PIN (6 digits), returns it
 //   action=delete         -> delete device + all its readings (cascades)
 
 declare(strict_types=1);
@@ -90,6 +91,26 @@ case 'regen_pin':
     $exists->execute([$device_id]);
     if (!$exists->fetchColumn()) json_response(404, ['ok' => false, 'error' => 'no_such_device']);
     $pin = gen_ble_pin();
+    $pdo->prepare('UPDATE ed_energy_devices SET ble_pin = ? WHERE device_id = ?')
+        ->execute([$pin, $device_id]);
+    json_response(200, ['ok' => true, 'ble_pin' => $pin]);
+
+case 'set_pin':
+    // Manual counterpart to regen_pin, for handing out a memorable or
+    // pre-agreed PIN instead of a random one.
+    $device_id = (string)($_POST['device_id'] ?? '');
+    $pin       = trim((string)($_POST['ble_pin'] ?? ''));
+    if ($device_id === '') json_response(400, ['ok' => false, 'error' => 'bad_input']);
+    // Exactly six digits — the same shape gen_ble_pin() produces and the
+    // migration backfilled. The Android app compares the typed PIN against
+    // this string verbatim, so a longer or non-numeric value would lock the
+    // owner out of their own meter (its PIN field is digits-only).
+    if (!preg_match('/^[0-9]{6}$/', $pin)) {
+        json_response(400, ['ok' => false, 'error' => 'bad_pin']);
+    }
+    $exists = $pdo->prepare('SELECT 1 FROM ed_energy_devices WHERE device_id = ?');
+    $exists->execute([$device_id]);
+    if (!$exists->fetchColumn()) json_response(404, ['ok' => false, 'error' => 'no_such_device']);
     $pdo->prepare('UPDATE ed_energy_devices SET ble_pin = ? WHERE device_id = ?')
         ->execute([$pin, $device_id]);
     json_response(200, ['ok' => true, 'ble_pin' => $pin]);
