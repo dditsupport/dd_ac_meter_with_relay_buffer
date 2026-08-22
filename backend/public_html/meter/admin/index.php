@@ -20,7 +20,7 @@ $recent = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — admin</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
 </head><body>
 <header class="topbar">
   <div class="brand">AC Energy Meter — admin</div>

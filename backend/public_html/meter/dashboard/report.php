@@ -49,7 +49,7 @@ $month_ist = date('Y-m');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — reports</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <style>
   .report-controls .month-pick { display: none; }
@@ -65,6 +65,10 @@ $month_ist = date('Y-m');
   .report-summary .day-total b { font-variant-numeric: tabular-nums; }
   .report-summary .day-total .unit { color: var(--muted); }
   .report-summary .grand { font-weight: 600; }
+  @media (max-width: 640px) {
+    .report-controls .month-pick.show { width: 100%; }
+    .report-controls input[type=month] { width: 100%; }
+  }
 </style>
 </head><body>
 
@@ -115,7 +119,7 @@ $month_ist = date('Y-m');
   <section class="card">
     <h2 id="report-title">Weekly — hourly kWh by day</h2>
     <p class="muted" id="report-sub">Each line is one day; compare the hour-by-hour kWh across days.</p>
-    <canvas id="report-chart" height="150"></canvas>
+    <div class="chart-wrap tall"><canvas id="report-chart"></canvas></div>
     <div id="report-summary" class="report-summary"></div>
     <div id="report-empty" hidden>No readings in this range.</div>
   </section>
@@ -214,6 +218,9 @@ function renderSummary(days, byDay, dayTotals, rangeTotal) {
 let mode = 'weekly';
 let chart = null;
 
+// Matches the 640px breakpoint the stylesheet reflows at.
+const narrowScreen = () => window.innerWidth < 640;
+
 function currentRange() {
   if (mode === 'weekly') {
     const from = addDays(TODAY_IST, -6) + 'T00:00:00';   // last 7 days incl. today
@@ -303,15 +310,24 @@ async function load() {
   const stray = Chart.getChart('report-chart');
   if (stray) stray.destroy();
   const canvas = document.getElementById('report-chart');
+  // The wrapper carries a fixed height, so collapse it when there is nothing to
+  // draw rather than leaving a tall blank box above the empty-state message.
+  // Note the ordering below: it is un-hidden BEFORE the chart is constructed, so
+  // Chart.js never measures a zero-sized canvas (see (2) above).
+  const wrap = canvas.parentElement;
   if (empty) {
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    wrap.hidden = true;
     return;
   }
+  wrap.hidden = false;
   chart = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: { datasets },
     options: {
-      responsive: true, animation: false,
+      // Height comes from the .chart-wrap parent (see style.css) so the chart
+      // doesn't collapse to a short strip on a phone.
+      responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'nearest', intersect: false },
       scales: {
         x: {
@@ -319,7 +335,11 @@ async function load() {
           // isn't clipped against the right edge.
           type: 'linear', min: 0, max: 24,
           title: { display: true, text: 'Hour of day (IST)' },
-          ticks: { stepSize: 1, callback: v => pad(v) + ':00' },
+          // 25 hour labels overprint each other on a phone. Keep the hourly
+          // grid but let Chart.js thin the labels to what actually fits.
+          ticks: { stepSize: 1, autoSkip: true, maxRotation: 0,
+                   maxTicksLimit: narrowScreen() ? 7 : 13,
+                   callback: v => pad(v) + ':00' },
         },
         y: { beginAtZero: true, title: { display: true, text: 'kWh' } },
       },
@@ -358,6 +378,20 @@ chSel.addEventListener('change', () => {
 document.getElementById('month-input').addEventListener('change', () => {
   if (mode === 'monthly') load();
 });
+
+// The tick budget above is decided when the chart is built, so rebuild it when
+// the viewport crosses the phone/desktop breakpoint (debounced — a rotation
+// fires a burst of resize events).
+(function rebuildOnBreakpointChange(){
+  let wasNarrow = narrowScreen(), timer = null;
+  window.addEventListener('resize', () => {
+    const isNarrow = narrowScreen();
+    if (isNarrow === wasNarrow) return;
+    wasNarrow = isNarrow;
+    clearTimeout(timer);
+    timer = setTimeout(load, 250);
+  });
+})();
 
 syncChannelPicker();
 load();

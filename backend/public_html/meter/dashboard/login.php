@@ -29,7 +29,7 @@ function try_password_login(string $u, #[\SensitiveParameter] string $p): ?strin
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — sign in</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
 </head><body class="auth">
 <form method="post" class="card login">
   <h1>AC Energy Meter</h1>

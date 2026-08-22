@@ -72,7 +72,7 @@ if ($selected !== '') {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — dashboard</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
@@ -84,6 +84,13 @@ if ($selected !== '') {
   .relay-dot.stale   { background: #d8a200; }
   .relay-dot.unknown { background: #c8ccc4; }
   .relay-state .relay-label { color: var(--text); }
+  @media (max-width: 640px) {
+    /* .controls stacks its children on mobile; these two are status text, not
+       fields, so keep them on one wrapping line instead of one row each. */
+    .controls .last-sync, .controls .relay-state { flex-wrap: wrap; }
+    #per-meter .stat { padding: 0.65rem; }
+    #per-meter .stat b { font-size: 1.2rem; }
+  }
 </style>
 </head><body>
 
@@ -175,12 +182,12 @@ if ($selected !== '') {
 
   <section class="card">
     <h2 id="chart-title">Energy</h2>
-    <canvas id="chart-energy" height="120"></canvas>
+    <div class="chart-wrap"><canvas id="chart-energy"></canvas></div>
   </section>
 
   <section class="card">
     <h2>Power</h2>
-    <canvas id="chart-power" height="120"></canvas>
+    <div class="chart-wrap"><canvas id="chart-power"></canvas></div>
   </section>
 </main>
 
@@ -242,6 +249,9 @@ function isoLocal(d){
 
 let energyChart, powerChart;
 
+// Matches the 640px breakpoint the stylesheet reflows at.
+const narrowScreen = () => window.innerWidth < 640;
+
 // Draws the cumulative meter reading (kWh) at the start and end of each bucket
 // just under its bar: "start" on one line, "→ end" on the next. Only shown when
 // there are few enough bars (<= 12) that the labels don't collide — so the
@@ -255,6 +265,12 @@ const endpointLabelsPlugin = {
     if (!ds || !meta || !meta.data || meta.data.length === 0) return;
     if (meta.data.length > 12) return;              // too many bars — skip
     if (ds.data[0]?.s == null) return;              // not the energy (bar) chart
+    // Phone-width check. Twelve bars fit these two-line labels on a laptop but
+    // overlap into an unreadable smear on a 360px screen, so drop them when
+    // each bar has less than a label's width to itself.
+    const MIN_PX_PER_LABEL = 46;
+    const plotWidth = chart.chartArea?.width ?? chart.width;
+    if (plotWidth / meta.data.length < MIN_PX_PER_LABEL) return;
     const ctx = chart.ctx;
     const yTop = chart.scales.x.bottom + 2;         // just below the month labels
     ctx.save();
@@ -266,8 +282,13 @@ const endpointLabelsPlugin = {
     meta.data.forEach((bar, i) => {
       const p = ds.data[i];
       if (!p || p.s == null || p.e == null) return;
-      ctx.fillText(fmt(p.s), bar.x, yTop + 11);
-      ctx.fillText('→ ' + fmt(p.e), bar.x, yTop + 23);
+      // Centre-aligned text on the first/last bar hangs off the canvas edge and
+      // gets clipped; nudge those back inside.
+      const top = fmt(p.s), bot = '→ ' + fmt(p.e);
+      const half = Math.max(ctx.measureText(top).width, ctx.measureText(bot).width) / 2;
+      const x = Math.min(Math.max(bar.x, half + 1), chart.width - half - 1);
+      ctx.fillText(top, x, yTop + 11);
+      ctx.fillText(bot, x, yTop + 23);
     });
     ctx.restore();
   },
@@ -278,6 +299,9 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showL
   const x = {
     type: 'time',
     time: { tooltipFormat: 'PPp', unit: xOpts.unit || undefined },
+    // A phone fits roughly half the tick labels a laptop does; let Chart.js
+    // drop the rest instead of overprinting them on top of each other.
+    ticks: { autoSkip: true, maxTicksLimit: narrowScreen() ? 6 : 12 },
   };
   if (xOpts.min) x.min = xOpts.min.getTime();
   if (xOpts.max) x.max = xOpts.max.getTime();
@@ -285,7 +309,10 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showL
     type, data: { datasets },
     plugins: showEndpoints ? [endpointLabelsPlugin] : [],
     options: {
-      responsive: true, animation: false,
+      // The .chart-wrap parent owns the height (see style.css); keeping the
+      // canvas's attribute ratio instead collapses the chart to a ~120px strip
+      // on a phone.
+      responsive: true, maintainAspectRatio: false, animation: false,
       parsing: { xAxisKey: 't', yAxisKey: 'y' },
       // Reserve room under the x-axis for the start/end reading labels.
       layout: showEndpoints ? { padding: { bottom: 28 } } : {},
@@ -458,15 +485,32 @@ async function loadLive(){
     today_kwh === null ? '—' : (today_kwh + baseline).toFixed(2);
 }
 
+let currentRangeKey = 'today';
 document.querySelectorAll('.range-buttons button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.range-buttons button').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
-    loadRange(b.dataset.range);
+    currentRangeKey = b.dataset.range;
+    loadRange(currentRangeKey);
   });
 });
 // initial load: today
 document.querySelector('.range-buttons button[data-range="today"]').click();
+
+// Chart.js resizes its canvas on rotation by itself, but the tick budget and
+// the endpoint labels are decided at build time — so rebuild when the viewport
+// crosses the phone/desktop breakpoint. Debounced: a rotation fires a burst of
+// resize events, and each rebuild refetches the range.
+(function rebuildOnBreakpointChange(){
+  let wasNarrow = narrowScreen(), timer = null;
+  window.addEventListener('resize', () => {
+    const isNarrow = narrowScreen();
+    if (isNarrow === wasNarrow) return;
+    wasNarrow = isNarrow;
+    clearTimeout(timer);
+    timer = setTimeout(() => loadRange(currentRangeKey), 250);
+  });
+})();
 
 // "Last sync" relative time. Server timestamp is in APP_TIMEZONE (IST);
 // append that offset so the instant is correct in any viewer's browser.
