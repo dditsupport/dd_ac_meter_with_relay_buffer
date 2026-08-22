@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Lock
@@ -35,9 +35,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dangeedums.acmeter.ble.WifiScanResult
 
@@ -45,7 +50,12 @@ import com.dangeedums.acmeter.ble.WifiScanResult
 fun WifiConfigScreen(vm: WifiConfigViewModel, onBack: () -> Unit) {
     val ui by vm.ui.collectAsStateWithLifecycle()
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    // The whole screen scrolls as one surface. It used to be a fixed Column whose
+    // only scrollable part was the network LazyColumn, so the list was confined to
+    // whatever vertical space was left over — once the TX-power section was added
+    // above it, that was a ~100dp strip and everything else was unreachable.
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)
+                              .verticalScroll(rememberScrollState())) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -90,7 +100,24 @@ fun WifiConfigScreen(vm: WifiConfigViewModel, onBack: () -> Unit) {
         OutlinedTextField(
             value = ui.password,
             onValueChange = vm::setPassword,
-            label = { Text("Password (leave blank for open network)") },
+            label = {
+                // At the full label size this string wrapped, which is what made
+                // the field two rows tall. The hint rides along at 0.7em — a
+                // size relative to the label, not a fixed sp — so it keeps
+                // shrinking in step with "Password" when the label floats up on
+                // focus. A fixed size would leave the hint full-size against a
+                // shrunken label.
+                Text(
+                    buildAnnotatedString {
+                        append("Password")
+                        withStyle(SpanStyle(fontSize = 0.7.em)) {
+                            append(" (leave blank for open network)")
+                        }
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
@@ -164,9 +191,12 @@ fun WifiConfigScreen(vm: WifiConfigViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp),
-                       modifier = Modifier.weight(1f, fill = false)) {
-                items(ui.networks, key = { it.ssid + it.rssi }) { net ->
+            // Not a LazyColumn: a lazy list inside a scrolling parent is measured
+            // with unbounded height and throws. It doesn't need to be lazy either
+            // — the firmware emits at most MAX_SCAN_RESULTS (12) APs, and the
+            // view model then keeps one row per SSID.
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ui.networks.forEach { net ->
                     NetworkRow(
                         net = net,
                         selected = net.ssid == ui.selected,
