@@ -421,7 +421,20 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  StaticJsonDocument<256> rdoc;
+  // Must hold the WHOLE ingest response, not just the part this build reads:
+  // ok + acked_up_to_seq + server_time + log_interval_sec, plus the relay
+  // config (relay_version / relay_schedule / relay_compressor_watts /
+  // relay_grace_min). 256 B only ever fit the response of a device with NO
+  // schedule configured — one open-hours window pushes it over, and an
+  // overflowing StaticJsonDocument fails the parse OUTRIGHT, so the device
+  // would log "bad response JSON" and silently stop picking up log_interval_sec
+  // as well as its relay schedule.
+  //
+  // static, not a local: the connectivity task shares its stack with the
+  // mbedTLS handshake (see CONN_TASK_STACK). Only this task calls post_batch(),
+  // so one shared instance is safe.
+  static StaticJsonDocument<1024> rdoc;
+  rdoc.clear();
   if (deserializeJson(rdoc, resp)) {
     LOG_PRINTF("[wifi] bad response JSON: %s\n", resp.c_str());
     return false;

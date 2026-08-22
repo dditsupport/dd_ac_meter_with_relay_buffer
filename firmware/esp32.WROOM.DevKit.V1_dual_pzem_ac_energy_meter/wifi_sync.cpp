@@ -434,12 +434,20 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  // Must hold the whole ingest response, including relay_channels[] — one
-  // entry per relay, each carrying a full open-hours schedule array. 256 B was
-  // enough for the old single flat relay config but overflows here, and an
-  // overflowing StaticJsonDocument fails the parse outright (so the device
-  // would report "bad response JSON" and never pick up its relay config).
-  StaticJsonDocument<2048> rdoc;
+  // Must hold the whole ingest response, including relay_channels[] — one entry
+  // per relay, each carrying a full open-hours schedule array. Sized by
+  // expression so it grows with the relay count instead of needing a manual
+  // bump: a fixed 2048 was already marginal at 2 relays with multi-window
+  // schedules and would overflow at 3. That matters because an overflowing
+  // StaticJsonDocument fails the parse OUTRIGHT — the device would log "bad
+  // response JSON" and silently stop picking up log_interval_sec AND its relay
+  // config, not just the part that didn't fit.
+  //
+  // static, not a local: at 3 relays this is ~3.3 KB, and the connectivity task
+  // shares its stack with the mbedTLS handshake (see CONN_TASK_STACK). Only
+  // this task calls post_batch(), so a single shared instance is safe.
+  static StaticJsonDocument<1024 + RELAY_COUNT * 768> rdoc;
+  rdoc.clear();
   if (deserializeJson(rdoc, resp)) {
     LOG_PRINTF("[wifi] bad response JSON: %s\n", resp.c_str());
     return false;
