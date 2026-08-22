@@ -12,13 +12,25 @@
 }
 
 * { box-sizing: border-box; }
+html {
+  /* Stop mobile Safari/Chrome from inflating text in "wide" blocks after a
+     rotate — the layout below is already sized for a phone. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   margin: 0;
+  /* Nothing here is wider than the viewport by design, so a stray overflow is
+     a bug, not a scroll affordance. Clip it rather than let the whole page
+     slide sideways under the reader's thumb. */
+  overflow-x: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--text);
   background: var(--bg);
   line-height: 1.4;
 }
+
+img, canvas, svg { max-width: 100%; }
 
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -114,11 +126,21 @@ table.grid .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 
 /* Login screen */
 body.auth { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg); padding: 1rem; }
+@supports (min-height: 100dvh) { body.auth { min-height: 100dvh; } }
 .card.login { width: 320px; max-width: 100%; }
 .card.login h1 { margin: 0 0 1rem; font-size: 1.3rem; color: var(--primary); text-align: center; }
 .card.login label { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.85rem; }
 .card.login input { width: 100%; }
 .card.login button { width: 100%; padding: 0.6rem; font-size: 1rem; }
+
+/* Charts. Chart.js keeps the canvas's own width/height attribute ratio when
+   `responsive` is on, which squashes a 300x120 canvas into a ~120px-tall strip
+   on a phone. Give the canvas a sized wrapper instead and pair this with
+   maintainAspectRatio:false so the chart fills a height we control per
+   breakpoint. */
+.chart-wrap        { position: relative; width: 100%; height: 300px; }
+.chart-wrap.tall   { height: 360px; }
+.chart-wrap canvas { display: block; }
 
 /* Empty-state */
 .empty { text-align: center; color: var(--muted); padding: 2rem; }
@@ -150,5 +172,29 @@ table.grid input, table.grid select { max-width: 100%; min-width: 0; }
   /* Tables that don't already opt-in to scroll-x: wrap their parent .card. */
   .card > table.grid { display: block; overflow-x: auto; white-space: nowrap; }
   .inline-form     { flex-direction: column; align-items: stretch; }
-  .inline-form input, .inline-form button { width: 100%; }
+  /* Text fields fill the column, but a stretched checkbox renders its box
+     centred in a full-width slot and shoves its label to the far edge. */
+  .inline-form input:not([type=checkbox]):not([type=radio]),
+  .inline-form button { width: 100%; }
+  .inline-form .check { width: 100%; }
+
+  .chart-wrap      { height: 240px; }
+  .chart-wrap.tall { height: 300px; }
+
+  /* The top bar's link run is a row of tap targets, not a sentence — let it
+     wrap and give each link room for a fingertip. */
+  .topbar .user    { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.3rem; }
+  .topbar .user a  { padding: 0.25rem 0.1rem; }
+
+  /* iOS Safari zooms the whole page in when a focused control's text is under
+     16px, and never zooms back out. Every control on a phone gets 16px so
+     tapping a field doesn't shove the layout sideways. */
+  input:not([type=checkbox]):not([type=radio]), select, textarea,
+  table.grid input, table.grid select,
+  .field input, .field select { font-size: 16px; }
+
+  /* Fingertip-sized hit areas. 2.4rem ~= 38px, close to the 44px guidance
+     once the surrounding gap is counted. */
+  button, .range-buttons button { min-height: 2.4rem; }
+  input:not([type=checkbox]):not([type=radio]), select { min-height: 2.4rem; }
 }

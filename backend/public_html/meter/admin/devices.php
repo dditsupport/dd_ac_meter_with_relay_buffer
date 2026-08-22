@@ -58,7 +58,7 @@ $locations = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — devices</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=7">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
 <style>
   /* Devices as compact 2-line cards — everything fits the viewport width by
      wrapping, so there is no left/right scrolling. */
@@ -227,6 +227,9 @@ $locations = $pdo->query(
       </tr></thead>
       <tbody id="relay-rows"></tbody>
     </table>
+    <p id="relay-empty" class="relay-empty" hidden>
+      No windows &mdash; the AC is always allowed. Add one to restrict it to open hours.
+    </p>
     <div style="margin-top:0.75rem;">
       <button type="button" id="relay-add">+ Add window</button>
     </div>
@@ -244,7 +247,7 @@ $locations = $pdo->query(
         <input type="number" id="relay-gm" min="1" max="240" step="1" value="60">
       </label>
     </fieldset>
-    <div style="margin-top:0.75rem; display:flex; gap:0.5rem;">
+    <div class="relay-actions" style="margin-top:0.75rem; display:flex; gap:0.5rem;">
       <span style="flex:1"></span>
       <button type="button" id="relay-cancel">Cancel</button>
       <button type="button" id="relay-save">Save</button>
@@ -253,7 +256,17 @@ $locations = $pdo->query(
 </dialog>
 
 <style>
-.relay-dialog       { border:1px solid var(--border); border-radius:8px; padding:1rem 1.25rem; max-width:600px; width:90%; }
+/* Browsers without <dialog> render it as a plain inline element, i.e. always
+   visible. Pin the open/closed behaviour ourselves so the fallback path below
+   (setAttribute('open')) works the same everywhere. */
+dialog        { display: none; }
+dialog[open]  { display: block; }
+.relay-dialog       { border:1px solid var(--border); border-radius:8px; padding:1rem 1.25rem; max-width:600px; width:90%;
+                      max-height:90vh; overflow:auto; overscroll-behavior:contain; }
+@supports (max-height: 90dvh) { .relay-dialog { max-height: 90dvh; } }
+/* No <dialog> support: no top layer either, so place and stack it by hand. */
+.relay-dialog.fallback-open { position:fixed; top:5vh; left:50%; transform:translateX(-50%); z-index:1000;
+                              background:var(--surface); box-shadow:0 8px 30px rgba(0,0,0,0.3); }
 .relay-dialog::backdrop { background: rgba(0,0,0,0.35); }
 .relay-fw-warn      { margin:0 0 0.75rem; padding:0.5rem 0.7rem; border:1px solid #e6c200;
                       background:#fff8e1; border-radius:6px; font-size:0.82rem; line-height:1.35; }
@@ -270,6 +283,58 @@ $locations = $pdo->query(
 .relay-grid .overnight { display:inline-flex; align-items:center; gap:0.3rem; font-size:0.76rem; color:var(--muted); white-space:nowrap; }
 .relay-grid .overnight input { margin:0; }
 .relay-grid .overnight.on { color:var(--primary); font-weight:600; }
+.relay-grid .rm-cell button { line-height:1; }
+/* Shown only when there are no windows, so a blank schedule reads as blank
+   rather than as the pre-filled default it used to render. */
+.relay-empty        { margin:0.25rem 0 0; padding:0.9rem 0.75rem; border:1px dashed var(--border);
+                      border-radius:6px; text-align:center; font-size:0.85rem; color:var(--muted); }
+
+@media (max-width: 640px) {
+  /* Full-bleed sheet: a 600px dialog at 90% width is still wider than a phone,
+     which pushed the +1 day and remove columns off-screen. */
+  .relay-dialog     { width:100%; max-width:100%; height:100%; max-height:100%; margin:0;
+                      border:0; border-radius:0; padding:0.85rem 0.85rem 0; }
+  @supports (height: 100dvh) { .relay-dialog { height:100dvh; max-height:100dvh; } }
+  .relay-dialog.fallback-open { top:0; left:0; transform:none; }
+  .relay-dialog h3  { font-size:1.05rem; }
+
+  /* The schedule table can't fit five columns on a phone, so each window
+     becomes a labelled card instead of a row. */
+  .relay-grid, .relay-grid tbody, .relay-grid tr, .relay-grid td { display:block; width:100%; }
+  /* ...but the display:block above outranks the UA's [hidden] rule, so the
+     empty state could never hide the table without this. */
+  .relay-grid[hidden] { display:none; }
+  .relay-grid thead { display:none; }
+  .relay-grid tr    { border:1px solid var(--border); border-radius:6px; padding:0.6rem 0.65rem;
+                      margin-bottom:0.6rem; position:relative; }
+  .relay-grid td    { border-bottom:0; padding:0.35rem 0; }
+  .relay-grid td[data-label]::before {
+      content:attr(data-label); display:block; margin-bottom:0.25rem;
+      font-size:0.66rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
+  .relay-grid input[type=time] { width:100%; }
+  /* Seven day chips across, each a real tap target. */
+  .relay-grid .dow  { display:grid; grid-template-columns:repeat(7, 1fr); gap:0.25rem; }
+  .relay-grid .dow label       { padding:0; overflow:hidden; font-size:0.72rem; }
+  .relay-grid .dow label > span { display:block; padding:0.45rem 0; text-align:center; border-radius:3px; }
+  .relay-grid .dow input:checked + span { margin:0; padding:0.45rem 0; }
+  .relay-grid .rm-cell button  { width:100%; }
+  .relay-grid .rm-cell button::after { content:' Remove window'; }
+
+  .relay-knobs label { display:flex; margin-right:0; margin-bottom:0.5rem; }
+  .relay-knobs input { width:100%; }
+
+  /* Keep Cancel/Save reachable without scrolling to the bottom of the sheet. */
+  .relay-actions    { position:sticky; bottom:0; background:var(--surface); padding:0.75rem 0;
+                      margin-top:0.75rem; border-top:1px solid var(--border); }
+
+  .dev-row.line1, .dev-row.line2 { gap:0.5rem 0.6rem; }
+  .dev .f-id       { white-space:normal; overflow-wrap:anywhere; align-self:flex-start; }
+  .dev .f-name, .dev .f-location, .dev .f-owner { flex:1 1 100%; }
+  .dev .f-cap      { flex:0 0 7rem; }
+  .dev-actions     { margin-left:0; width:100%; flex-wrap:wrap; }
+  .dev-actions button, .dev-actions a { flex:1 1 auto; text-align:center; }
+  .dev-pin         { width:100%; }
+}
 </style>
 
 <script>
@@ -338,6 +403,20 @@ let currentCh   = 1;
 const rowsEl    = document.getElementById('relay-rows');
 let currentDev  = null;
 
+// Older mobile browsers (and a few in-app webviews) ship <dialog> without
+// showModal(). Fall back to a plain fixed-position panel so the editor still
+// opens rather than doing nothing on tap.
+function openDialog(d) {
+  if (typeof d.showModal === 'function') { d.showModal(); return; }
+  d.setAttribute('open', '');
+  d.classList.add('fallback-open');
+}
+function closeDialog(d) {
+  d.classList.remove('fallback-open');
+  if (typeof d.close === 'function') d.close();
+  else d.removeAttribute('open');
+}
+
 async function postRelay(action, fields) {
   const fd = new FormData();
   fd.append('action', action);
@@ -366,11 +445,18 @@ function renderRow(win) {
   tdDays.appendChild(dowWrap);
   tr.appendChild(tdDays);
 
+  // Each cell carries the column name it sits under. On a phone the table
+  // collapses into one card per window and the header row is hidden, so the
+  // label is re-drawn above the control from this attribute.
+  tdDays.dataset.label = 'Days';
+
   const tdOn = document.createElement('td');
+  tdOn.dataset.label = 'Open (on)';
   const onIn = document.createElement('input'); onIn.type='time'; onIn.value = win.on || '06:00';
   tdOn.appendChild(onIn); tr.appendChild(tdOn);
 
   const tdOff = document.createElement('td');
+  tdOff.dataset.label = 'Close (off)';
   const offIn = document.createElement('input'); offIn.type='time'; offIn.value = win.off || '18:00';
   tdOff.appendChild(offIn); tr.appendChild(tdOff);
 
@@ -398,11 +484,24 @@ function renderRow(win) {
   refreshOvernight();
 
   const tdRm = document.createElement('td');
+  tdRm.className = 'rm-cell';
   const rm = document.createElement('button'); rm.type='button'; rm.className='danger'; rm.textContent='×';
-  rm.addEventListener('click', () => tr.remove());
+  rm.title = 'Remove this window';
+  rm.addEventListener('click', () => { tr.remove(); syncEmptyState(); });
   tdRm.appendChild(rm); tr.appendChild(tdRm);
 
   rowsEl.appendChild(tr);
+  syncEmptyState();
+}
+
+// A device with no stored windows means "AC always allowed". The editor used to
+// render the 09:00–02:00 default into an empty schedule, which read as a saved
+// schedule even though the DB row was `[]` — so show the blank state instead,
+// and only produce the default when the admin actually adds a window.
+function syncEmptyState() {
+  const empty = rowsEl.querySelectorAll('tr').length === 0;
+  document.getElementById('relay-empty').hidden = !empty;
+  document.querySelector('.relay-grid').hidden  = empty;
 }
 
 function collectWindows() {
@@ -426,8 +525,8 @@ async function loadRelayChannel(ch) {
   const r = await postRelay('get', { device_id: currentDev, channel: ch });
   if (!r.ok) { alert('Error: ' + r.error); return false; }
   const schedule = r.schedule || [];
-  if (schedule.length === 0) renderRow({ days:[0,1,2,3,4,5,6], on:'09:00', off:'02:00' });
-  else schedule.forEach(renderRow);
+  schedule.forEach(renderRow);
+  syncEmptyState();
   document.getElementById('relay-cw').value = r.compressor_watts ?? 800;
   document.getElementById('relay-gm').value = r.grace_min ?? 60;
   return true;
@@ -454,15 +553,20 @@ document.querySelectorAll('button.relay').forEach(btn => btn.addEventListener('c
   chWrap.hidden = relayCount < 2;
 
   if (!await loadRelayChannel(1)) return;
-  dlg.showModal();
+  openDialog(dlg);
 }));
 
 chSel.addEventListener('change', () => {
   loadRelayChannel(parseInt(chSel.value, 10) || 1);
 });
 
-document.getElementById('relay-add'   ).addEventListener('click', () => renderRow({ days:[], on:'09:00', off:'02:00' }));
-document.getElementById('relay-cancel').addEventListener('click', () => dlg.close());
+document.getElementById('relay-add').addEventListener('click', () => {
+  // First window on an empty schedule gets the every-day 09:00–02:00 default;
+  // extra windows start with no days ticked so they can't silently duplicate it.
+  const first = rowsEl.querySelectorAll('tr').length === 0;
+  renderRow({ days: first ? [0,1,2,3,4,5,6] : [], on:'09:00', off:'02:00' });
+});
+document.getElementById('relay-cancel').addEventListener('click', () => closeDialog(dlg));
 document.getElementById('relay-save'  ).addEventListener('click', async () => {
   const windows = collectWindows();
   const r = await postRelay('set', {
@@ -475,7 +579,7 @@ document.getElementById('relay-save'  ).addEventListener('click', async () => {
   if (!r.ok) { alert('Error: ' + (r.detail || r.error)); return; }
   alert('Saved relay ' + currentCh + ' (version ' + r.version + ').' +
         ' Takes effect on the device\'s next sync.');
-  dlg.close();
+  closeDialog(dlg);
 });
 
 /* ---------- Live relay-state indicator ----------
