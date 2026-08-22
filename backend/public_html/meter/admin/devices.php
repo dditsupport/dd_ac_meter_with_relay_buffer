@@ -94,7 +94,9 @@ $locations = $pdo->query(
                             font-size: 0.95rem; vertical-align: middle; }
   .dev-pin { white-space: nowrap; font-size: 0.8rem; color: var(--muted); }
   .dev-pin code.pin { font-size: 0.95rem; letter-spacing: 0.06em; color: var(--text); }
+  .dev-pin .set-pin,
   .dev-pin .regen-pin { margin-left: 0.3rem; padding: 0.1rem 0.45rem; font-size: 0.9rem; }
+  .dev-pin .set-pin   { font-size: 0.78rem; }
   .dev-actions { margin-left: auto; display: flex; gap: 0.4rem; align-items: center; }
   .dev-actions a { font-size: 0.85rem; }
 </style>
@@ -185,7 +187,7 @@ $locations = $pdo->query(
                       title="Firmware <?= h($fw ?: '?') ?> uses the old relay convention — this schedule CUTS the AC during open hours. Flash &ge; <?= h($RELAY_CONV_FW) ?>.">⚠</span>
               <?php endif; ?>
             </span>
-            <span class="dev-pin">PIN: <code class="pin"><?= h((string)($d['ble_pin'] ?? '—')) ?></code><button class="regen-pin" title="Generate a new BLE PIN">↻</button></span>
+            <span class="dev-pin">PIN: <code class="pin"><?= h((string)($d['ble_pin'] ?? '—')) ?></code><button class="set-pin" title="Set a specific BLE PIN">Set</button><button class="regen-pin" title="Generate a new random BLE PIN">↻</button></span>
             <span class="dev-actions">
               <button class="rename">Save</button>
               <button class="relay">Relay</button>
@@ -383,6 +385,29 @@ document.querySelectorAll('button.delete-device').forEach(btn => btn.addEventLis
   const r = await post('delete', { device_id: tr.dataset.id });
   if (!r.ok) { alert('Error: ' + r.error); return; }
   tr.remove();
+}));
+
+// The PIN is the admin's to choose: `Set` takes a specific one, `↻` keeps
+// rolling a random one. Both are exactly six digits — see api/admin_devices.php
+// for why anything else would lock the owner out of their own meter.
+const PIN_RE = /^[0-9]{6}$/;
+document.querySelectorAll('button.set-pin').forEach(btn => btn.addEventListener('click', async () => {
+  const tr      = btn.closest('.dev');
+  const pinEl   = tr.querySelector('.pin');
+  const current = pinEl.textContent.trim();
+  const entered = prompt(
+    'Set this device\'s BLE PIN — exactly 6 digits.\n\n' +
+    'The old PIN stops working; the device owner must re-enter the new one in ' +
+    'the app after their next login.',
+    PIN_RE.test(current) ? current : ''
+  );
+  if (entered === null) return;                       // cancelled
+  const pin = entered.trim();
+  if (!PIN_RE.test(pin)) { alert('PIN must be exactly 6 digits.'); return; }
+  if (pin === current) return;                        // unchanged — nothing to do
+  const r = await post('set_pin', { device_id: tr.dataset.id, ble_pin: pin });
+  if (!r.ok) { alert('Error: ' + r.error); return; }
+  pinEl.textContent = r.ble_pin;
 }));
 
 document.querySelectorAll('button.regen-pin').forEach(btn => btn.addEventListener('click', async () => {
