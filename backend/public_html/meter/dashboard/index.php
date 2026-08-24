@@ -84,6 +84,9 @@ if ($selected !== '') {
   .relay-dot.stale   { background: #d8a200; }
   .relay-dot.unknown { background: #c8ccc4; }
   .relay-state .relay-label { color: var(--text); }
+  .meter-reading { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
+  .meter-reading b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .meter-reading:empty { display: none; }
   @media (max-width: 640px) {
     /* .controls stacks its children on mobile; these two are status text, not
        fields, so keep them on one wrapping line instead of one row each. */
@@ -183,6 +186,10 @@ if ($selected !== '') {
   <section class="card">
     <h2 id="chart-title">Energy</h2>
     <div class="chart-wrap"><canvas id="chart-energy"></canvas></div>
+    <!-- Meter reading across the charted period. The per-bar readings drawn
+         under the bars vanish once the bars get narrow (30 days, or any phone),
+         so this line is what always carries the figure. -->
+    <p class="meter-reading" id="meter-reading"></p>
   </section>
 
   <section class="card">
@@ -273,12 +280,6 @@ const endpointLabelsPlugin = {
     if (!ds || !meta || !meta.data || meta.data.length === 0) return;
     if (meta.data.length > 12) return;              // too many bars — skip
     if (ds.data[0]?.s == null) return;              // not the energy (bar) chart
-    // Phone-width check. Twelve bars fit these two-line labels on a laptop but
-    // overlap into an unreadable smear on a 360px screen, so drop them when
-    // each bar has less than a label's width to itself.
-    const MIN_PX_PER_LABEL = 46;
-    const plotWidth = chart.chartArea?.width ?? chart.width;
-    if (plotWidth / meta.data.length < MIN_PX_PER_LABEL) return;
     const ctx = chart.ctx;
     const yTop = chart.scales.x.bottom + 2;         // just below the month labels
     ctx.save();
@@ -287,16 +288,32 @@ const endpointLabelsPlugin = {
     ctx.textAlign = 'center';
     const fmt = v => (v == null ? '' : Number(v).toLocaleString(undefined,
                        { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
-    meta.data.forEach((bar, i) => {
+
+    const labels = meta.data.map((bar, i) => {
       const p = ds.data[i];
-      if (!p || p.s == null || p.e == null) return;
+      if (!p || p.s == null || p.e == null) return null;
+      return { bar, top: fmt(p.s), bot: '→ ' + fmt(p.e) };
+    });
+
+    // Measure the labels rather than assuming a width. These readings continue
+    // from the replaced meter, so they run to five or six figures and are much
+    // wider than the bare deltas this used to draw — a fixed threshold tuned
+    // for "4.2" lets "8,694.5" overlap its neighbour. Drop the whole row when
+    // the widest label wouldn't clear the next bar (which is what keeps it off
+    // a phone-width chart too).
+    const widthOf = l => Math.max(ctx.measureText(l.top).width, ctx.measureText(l.bot).width);
+    const widest = labels.reduce((m, l) => l ? Math.max(m, widthOf(l)) : m, 0);
+    const plotWidth = chart.chartArea?.width ?? chart.width;
+    if (plotWidth / meta.data.length < widest + 8) { ctx.restore(); return; }
+
+    labels.forEach(l => {
+      if (!l) return;
       // Centre-aligned text on the first/last bar hangs off the canvas edge and
       // gets clipped; nudge those back inside.
-      const top = fmt(p.s), bot = '→ ' + fmt(p.e);
-      const half = Math.max(ctx.measureText(top).width, ctx.measureText(bot).width) / 2;
-      const x = Math.min(Math.max(bar.x, half + 1), chart.width - half - 1);
-      ctx.fillText(top, x, yTop + 11);
-      ctx.fillText(bot, x, yTop + 23);
+      const half = widthOf(l) / 2;
+      const x = Math.min(Math.max(l.bar.x, half + 1), chart.width - half - 1);
+      ctx.fillText(l.top, x, yTop + 11);
+      ctx.fillText(l.bot, x, yTop + 23);
     });
     ctx.restore();
   },
@@ -350,7 +367,19 @@ async function loadRange(rangeKey){
     const j = await (await fetch(readingsUrl(R.aggregate, ch), { credentials: 'same-origin' })).json();
     if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0 };
 
-    const energy = j.points.map(p => ({ t: p.t, y: p.kwh, s: p.kwh_start, e: p.kwh_end }));
+    // capacity_kw is repurposed as the replaced meter's last reading (kWh) at
+    // install. The stat cards already continue from it, so the per-bucket
+    // start/end readings drawn under the bars have to as well — otherwise the
+    // chart says "13.5 -> 18.4" while Period total says 8708.17. Only s/e are
+    // offset: `y` is a within-bucket delta, and adding a constant to both ends
+    // of a subtraction would cancel out anyway.
+    const base = Number(j.capacity_kw) || 0;
+    const energy = j.points.map(p => ({
+      t: p.t,
+      y: p.kwh,
+      s: p.kwh_start == null ? null : p.kwh_start + base,
+      e: p.kwh_end   == null ? null : p.kwh_end   + base,
+    }));
 
     // The Watt line can be finer-grained than the energy bars. When a distinct
     // powerAggregate is set, pull the power series from its own request so
@@ -366,7 +395,7 @@ async function loadRange(rangeKey){
     const total = typeof j.total_kwh === 'number'
       ? j.total_kwh
       : energy.reduce((a, p) => a + (p.y || 0), 0);
-    return { ch, ok: true, energy, power, total, baseline: Number(j.capacity_kw) || 0 };
+    return { ch, ok: true, energy, power, total, baseline: base };
   }));
 
   if (!per.some(r => r.ok)) { alert('Error loading readings'); return; }
@@ -406,6 +435,24 @@ async function loadRange(rangeKey){
   // would multiply it by the meter count.
   const baseline = per.reduce((b, r) => b || r.baseline, 0);
   const periodTotal = per.reduce((a, r) => a + r.total, 0) + baseline;
+
+  // Meter reading across the charted window: where the counter stood at the
+  // first bucket and where it stands at the last, both already continuing from
+  // the replaced meter's reading. Shown as text so it survives the bar labels
+  // being dropped on a narrow chart.
+  const fmtKwh = v => Number(v).toLocaleString(undefined,
+                       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const readings = per.filter(r => r.ok).map(r => {
+    const first = r.energy.find(p => p.s != null);
+    const last  = r.energy.findLast ? r.energy.findLast(p => p.e != null)
+                                    : [...r.energy].reverse().find(p => p.e != null);
+    if (!first || !last) return null;
+    return (MULTI ? `Meter ${r.ch}: ` : '') +
+           `<b>${fmtKwh(first.s)}</b> → <b>${fmtKwh(last.e)}</b> kWh ` +
+           `(${fmtKwh(last.e - first.s)} kWh)`;
+  }).filter(Boolean);
+  document.getElementById('meter-reading').innerHTML =
+    readings.length ? 'Meter reading: ' + readings.join('<br>') : '';
   const peakP = per.reduce((m, r) =>
     Math.max(m, r.power.reduce((n, p) => Math.max(n, p.y || 0), 0)), 0);
   document.getElementById('stat-total').textContent = periodTotal.toFixed(2);
