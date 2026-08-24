@@ -221,11 +221,19 @@ const RANGES = {
   today: {
     aggregate: 'hourly', powerAggregate: '5min', from: () => startOfToday(),
     label: "Today's energy (per hour)", energyLabel: 'kWh / hour',
-    // Clamp the X axis to the daylight window so the shape of the day
-    // is consistent and "nothing yet" is obvious.
-    xMin: () => hourOfToday(7), xMax: () => hourOfToday(19),
+    // Midnight through the end of the hour in progress — the day so far.
+    // This used to clamp to 07:00-19:00 on the assumption that a site only
+    // draws power during business hours, which hid every overnight reading on
+    // a meter that runs around the clock. The right edge tracks the current
+    // hour rather than sitting at midnight so the elapsed part of the day
+    // fills the plot instead of being squeezed against a mostly empty axis.
+    xMin: () => hourOfToday(0),
+    xMax: () => hourOfToday(new Date().getHours() + 1),
     xUnit: 'hour',
   },
+  // Same data as `today`; the difference is the frame. This one always shows
+  // the full midnight-to-midnight day, so the hours still to come are visible
+  // as empty space and every day is drawn to the same scale.
   '24h': { aggregate: 'hourly', powerAggregate: '5min', from: () => startOfToday(),
            label: '24 hours (12 AM – 12 AM)', energyLabel: 'kWh / hour',
            // Frame the whole calendar day midnight-to-midnight, not a rolling
