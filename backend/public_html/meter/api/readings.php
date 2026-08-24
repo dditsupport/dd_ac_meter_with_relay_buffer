@@ -5,6 +5,10 @@
 // aggregate=daily / monthly compute generated kWh as MAX(energy_wh)-MIN(energy_wh)
 // per bucket — works because the PZEM Wh counter is monotonically increasing
 // across resets (and the firmware logs PZEM resets if they happen).
+//
+// `origin_kwh` is this channel's first-ever cumulative reading; the dashboard
+// subtracts it so a chart that continues from the replaced meter starts at the
+// admin-entered "Old kWh" exactly. See the comment where it is computed.
 
 declare(strict_types=1);
 require_once __DIR__ . '/_db.php';
@@ -102,6 +106,26 @@ if ($row === false || $row['fst'] === null || $row['lst'] === null) {
     $total_kwh = round(max(0.0, $total_wh) / 1000.0, 3);
 }
 
+// The device's first-ever reading on this channel, in kWh. A PZEM counter is
+// rarely at exactly zero when a unit goes into service — bench testing or a
+// pre-commissioning run leaves a few hundred Wh on it — so "old meter reading +
+// raw counter" starts that much ABOVE the figure the admin typed in. Handing
+// the origin to the client lets it anchor the series, so the first reading this
+// device ever logged lines up exactly with the replaced meter's final reading.
+// Deliberately the earliest row by time, not MIN(energy_wh): after a counter
+// reset MIN would be the post-reset zero rather than the value at install.
+// Served by idx_device_ch_time (device_id, channel, wall_time) as an index seek.
+$og = $pdo->prepare(
+    'SELECT energy_wh FROM ed_energy_readings
+      WHERE device_id = ? AND channel = ?
+      ORDER BY wall_time ASC, id ASC LIMIT 1'
+);
+$og->execute([$device_id, $channel]);
+$origin_wh  = $og->fetchColumn();
+$origin_kwh = ($origin_wh === false || $origin_wh === null)
+    ? null
+    : round((float)$origin_wh / 1000.0, 3);
+
 json_response(200, [
     'ok'            => true,
     'device_id'     => $device_id,
@@ -114,6 +138,7 @@ json_response(200, [
     'aggregate'     => $aggregate,
     'channel'       => $channel,
     'total_kwh'     => $total_kwh,
+    'origin_kwh'    => $origin_kwh,
     'points'        => $points,
 ]);
 

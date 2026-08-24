@@ -180,6 +180,28 @@ computes energy generated in the bucket as
 `P_peak`, `V_avg`, `samples`, and `approx` (true if any rows in the
 bucket had `time_confidence='approx'`).
 
+### Continuing from a replaced meter
+
+`ed_energy_devices.capacity_kw` is repurposed as the **old meter's final
+reading in kWh** at install ("Old kWh" in admin), so the dashboard can show a
+meter reading that carries on from the unit this device replaced.
+
+Adding it straight onto the PZEM counter overshoots, because that counter is
+rarely at zero when a device goes into service — bench testing leaves a few
+hundred Wh on it. `readings.php` therefore also returns `origin_kwh`, the
+channel's **first-ever** reading, and the dashboard charts
+`old_kwh + (counter − origin_kwh)`. A device entered as `1348.10` then starts
+at exactly `1348.10` rather than `1348.52`.
+
+`origin_kwh` is the earliest row by `wall_time`, deliberately not
+`MIN(energy_wh)`: after a PZEM reset `MIN` would be the post-reset zero rather
+than the value the counter held at install. It is `null` for a device with no
+readings, in which case the dashboard falls back to `old_kwh` alone.
+
+Note this anchors the *chart*; the Today and Period total cards still add the
+raw `capacity_kw` to a window's consumption, so they agree with the chart's end
+reading only when the window covers the device's whole history.
+
 ## Time zone (IST)
 
 Everything runs in `APP_TIMEZONE` (default `Asia/Kolkata`, IST/+05:30):

@@ -367,18 +367,25 @@ async function loadRange(rangeKey){
     const j = await (await fetch(readingsUrl(R.aggregate, ch), { credentials: 'same-origin' })).json();
     if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0 };
 
-    // capacity_kw is repurposed as the replaced meter's last reading (kWh) at
-    // install. The stat cards already continue from it, so the per-bucket
-    // start/end readings drawn under the bars have to as well — otherwise the
-    // chart says "13.5 -> 18.4" while Period total says 8708.17. Only s/e are
-    // offset: `y` is a within-bucket delta, and adding a constant to both ends
-    // of a subtraction would cancel out anyway.
-    const base = Number(j.capacity_kw) || 0;
+    // Readings that continue from the meter this device replaced.
+    //
+    // capacity_kw is repurposed as that meter's final reading at install, but
+    // adding it straight onto the raw PZEM counter overshoots: the counter is
+    // rarely at zero when a unit goes into service (bench testing leaves a few
+    // hundred Wh on it), so a device entered as 1348.10 charted from 1348.52.
+    // Anchor on origin_kwh — this channel's first-ever reading — so the point
+    // where this device took over IS the old meter's final reading.
+    //
+    // Only s/e are offset. `y` is a within-bucket delta, and shifting both ends
+    // of a subtraction by a constant cancels out.
+    const base   = Number(j.capacity_kw) || 0;
+    const origin = Number(j.origin_kwh)  || 0;
+    const offset = base - origin;
     const energy = j.points.map(p => ({
       t: p.t,
       y: p.kwh,
-      s: p.kwh_start == null ? null : p.kwh_start + base,
-      e: p.kwh_end   == null ? null : p.kwh_end   + base,
+      s: p.kwh_start == null ? null : p.kwh_start + offset,
+      e: p.kwh_end   == null ? null : p.kwh_end   + offset,
     }));
 
     // The Watt line can be finer-grained than the energy bars. When a distinct
