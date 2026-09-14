@@ -284,11 +284,3 @@
 // degrading gracefully instead of panicking. Tune from the logged values.
 #define WIFI_MIN_FREE_HEAP_BYTES    45000
 #define WIFI_MIN_LARGEST_BLOCK_BYTES 40000
-
-// ---------- ROM / panic log visibility ----------
-// log_serial::init() can silence ets_printf / ROM putchar output to keep the
-// console clean of the Wi-Fi PHY's high-bit garbage. But that same path carries
-// the panic reason line ("CORRUPT HEAP: ...", "assert failed ...", "Guru
-// Meditation ..."), so silencing it hides *why* a crash happened. Set to 0 while
-// diagnosing crashes to see the reason; 1 = quiet production console (current).
-#define ROM_LOG_QUIET           1

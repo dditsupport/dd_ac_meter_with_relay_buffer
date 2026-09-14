@@ -45,18 +45,9 @@ void init() {
   esp_log_level_set("HTTPClient",    ESP_LOG_WARN);
   // Anything that still goes through esp_log gets serialised by our mutex.
   esp_log_set_vprintf(&locked_vprintf);
-#if ROM_LOG_QUIET
-  // Production: anything that goes through ets_printf / ROM putchar gets
-  // dropped (silences the Wi-Fi PHY's high-bit garbage). NOTE: this also
-  // hides the panic reason line — set ROM_LOG_QUIET=0 in config.h to debug.
+  // Anything that goes through ets_printf / ROM putchar gets dropped.
   ets_install_putc1(&noop_putc);
   ets_install_putc2(nullptr);
-#else
-  // Debug: leave ROM putchar at its default so panic/heap-corruption/assert
-  // diagnostics reach the console. `noop_putc` is referenced here only to keep
-  // the compiler from warning it's unused when ROM_LOG_QUIET is 0.
-  (void)&noop_putc;
-#endif
 }
 
 Lock::Lock() : taken_(false) {

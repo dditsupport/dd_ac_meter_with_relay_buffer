@@ -94,14 +94,6 @@
 #define WIFI_MIN_FREE_HEAP_BYTES     45000
 #define WIFI_MIN_LARGEST_BLOCK_BYTES 40000
 
-// ---------- ROM / panic log visibility ----------
-// log_serial::init() can silence ets_printf / ROM putchar output to keep the
-// console clean of the Wi-Fi PHY's high-bit garbage. But that same path carries
-// the panic reason line ("CORRUPT HEAP: ...", "assert failed ...", "Guru
-// Meditation ..."), so silencing it hides *why* a crash happened. 1 = quiet
-// production console; set to 0 while diagnosing a crash to see the reason.
-#define ROM_LOG_QUIET           1
-
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
 // Also fires once on first Wi-Fi cycle after boot, so a fresh device picks
