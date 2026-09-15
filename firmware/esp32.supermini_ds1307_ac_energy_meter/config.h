@@ -391,10 +391,22 @@
 
 // ---------- Task config ----------
 #define SAMPLING_TASK_STACK     6144
-// post_batch()'s 16 KB StaticJsonDocument now lives in .bss (file-scope static),
-// not on this stack, so the task only has to hold the mbedTLS handshake + call
-// frames. 32 KB stays comfortably above that with margin.
-#define CONN_TASK_STACK         32768
+// xTaskCreate takes this stack FROM THE HEAP, so every byte here is a byte the
+// mbedTLS handshake cannot have — and the handshake's transient peak is 45-48 KB
+// (see HEAP_MIN_FREE_BYTES). 32768 was chosen back when post_batch()'s 16 KB
+// StaticJsonDocument lived on this stack; it moved to .bss long ago and the
+// figure was never revisited, leaving ~20 KB committed to a task that does not
+// use it.
+//
+// That mattered once POST_BODY_BUF_BYTES put another 8 KB of .bss beyond the
+// heap's reach: at-rest free fell to ~49 KB against a 47.8 KB peak draw, the
+// handshake ran the heap down to 296 bytes, and every POST failed with code=-1.
+// 16384 returns 16 KB and restores ~18 KB of margin — still a third more than
+// the 12288 the reference build runs the same handshake on.
+//
+// Raising this again means re-checking it against that peak draw, because the
+// two come out of the same pool.
+#define CONN_TASK_STACK         16384
 #define SAMPLING_TASK_PRIO      3
 #define CONN_TASK_PRIO          2
 
@@ -407,32 +419,55 @@
 // Deferring RECOVERS NOTHING on its own: a C heap never compacts, so once under
 // the line the device would defer every POST forever while still showing
 // "Wi-Fi connected". That is why each deferral is counted and the heap watchdog
-// in the connectivity task reboots at HEAP_LOW_REBOOT_CYCLES. The two belong
-// together — post_batch() deliberately POSTS ANYWAY when the reboot escalation
-// is off, because a failed handshake is recoverable and a silent stop is not.
+// in the connectivity task reboots at HEAP_LOW_REBOOT_CYCLES.
 //
-// MEASURED on solar-2e5694: 618 samples over three boots. `free - min` across
-// every sample once the low-water mark is set is 57.1-60.0 KB, median 58.9 —
-// that is what a POST actually costs at its peak, more than the ~48 KB a live
-// session holds, because the handshake peaks higher than the steady session.
-// So the floor is ~59 KB free and 62000 leaves ~3 KB of warning above it. The
-// largest-block figure stays modest because mbedTLS spreads its allocation over
-// many blocks rather than one, the biggest being its ~16 KB record buffer.
+// MEASURED ON THIS BUILD (meter-2e5694, WROOM DevKit V1, 2026-09-15), which is
+// the only measurement that counts. NOTE these were taken with the OLD
+// CONN_TASK_STACK 32768; that is now 16384, so at-rest free should be ~16 KB
+// higher (~65 KB). The largest-block and peak-draw figures are unaffected.
+//     [wifi] low heap — deferring POST (free=49212 largest=47092)
+//   free at rest    48716 - 49324 B   (with the 32 KB stack)
+//   largest block   34804 - 47092 B
 //
-// ⚠ THIS BOARD IS NOT THE ONE THAT WAS MEASURED. solar-2e5694 is an ESP32
-// DevKit V1: dual core, ~520 KB SRAM, CONN_TASK_STACK 12288, no relay code.
-// This build is an ESP32-C3 Super Mini: single core, ~400 KB SRAM,
-// CONN_TASK_STACK 32768 (20 KB more heap committed to that one task) and it
-// carries relay.cpp. Its at-rest free heap is therefore materially LOWER than
-// 72 KB, and 62000 may sit at or above where this board idles — in which case
-// the guard defers from the first POST and HEAP_LOW_REBOOT_CYCLES turns that
-// into a reboot every ~6 minutes.
+// WHAT A HANDSHAKE ACTUALLY COSTS, from the "min=" field (which reports
+// esp_get_minimum_free_heap_size(), the all-time low-water mark) on four real
+// POSTs on meter-2e5694:
+//     pre=48048 ... min=296     -> transient peak draw 47752 B
+//     pre=46944 ... min=408     ->                     46536 B
+//     pre=46200 ... min=408     ->                     45792 B
+//     pre=46876 ... min=1504    ->                     45372 B
+// So a TLS handshake transiently claims 45-48 KB, an order of magnitude more
+// than the ~3 KB the session holds once established (the "tls=" field). That
+// transient peak, not the steady cost, is what this floor has to clear.
 //
-// SO: read one "[wifi] heap free=… largest=…" line off a C3 before trusting
-// this number. If at-rest free is under ~65 KB, lower this to sit a few KB
-// below it, or set HEAP_LOW_REBOOT_CYCLES to 0 (which makes post_batch() log
-// and POST anyway instead of deferring) until it is measured.
-#define HEAP_MIN_FREE_BYTES          62000
+// 50000 sits ~2.2 KB above the worst observed peak. Below it the handshake is
+// going to fail anyway, so deferring is the correct and cheaper answer; above
+// it, at ~65 KB at rest (see CONN_TASK_STACK), there is ~15 KB of warning.
+//
+// Two earlier revisions got this wrong in instructive ways. 62000 came from the
+// solar_monitor_ds1307 reference build (~72.1 KB at rest) — a build with
+// CONN_TASK_STACK 12288 and no relay code — and sat ABOVE where this board
+// idles, so the guard tripped on the first POST of every boot and the watchdog
+// turned that into a ~2 minute reboot loop. 45000 then sat BELOW the handshake's
+// peak draw, which is just as useless in the other direction: the guard passes
+// and the handshake fails regardless. A floor only means something when it is
+// above the peak draw AND below at-rest free.
+//
+// THE SUPER MINI IS AN ESP32-C3 and every number above came off a WROOM: single
+// core, ~400 KB SRAM against the WROOM's ~520 KB. Its at-rest free heap will be
+// lower, so 50000 is PROVISIONAL here until a C3 prints its own [wifi] heap
+// line. If it turns out to idle below ~55 KB, cut CONN_TASK_STACK further
+// before lowering this floor — the floor cannot go under the handshake's peak
+// draw and still mean anything.
+//
+// Getting it wrong is no longer fatal either way: a boot that has never posted
+// is exempt from both the deferral and the reboot (see post_batch), so a floor
+// that is still too high shows up as a logged warning and a POST that happens
+// anyway, not as a reboot loop.
+#define HEAP_MIN_FREE_BYTES          50000
+// mbedTLS needs a ~16 KB record buffer as its single largest block; 20000 is
+// ~20% above that and far below the 42996 B worst case observed here, so it
+// refuses a genuinely starved heap without tripping on normal fragmentation.
 #define HEAP_MIN_LARGEST_BLOCK_BYTES 20000
 
 // Consecutive heap-guard deferrals before the connectivity task reboots.

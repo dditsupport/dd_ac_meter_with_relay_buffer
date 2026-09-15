@@ -669,9 +669,12 @@ static void connectivity_task(void *) {
     // compacts a C heap, so once fragmentation has starved the large contiguous
     // block mbedTLS needs, the device would defer forever while still showing
     // "Wi-Fi connected". A reboot is the only cure, so escalate to one after
-    // HEAP_LOW_REBOOT_CYCLES consecutive deferrals. Reaching that count takes
-    // several Wi-Fi cycles, which is itself the guard against rebooting early in
-    // a boot; health::boot_loop_tripped() backstops the rest.
+    // HEAP_LOW_REBOOT_CYCLES consecutive deferrals.
+    //
+    // post_batch() does not count a deferral until at least one POST has landed
+    // this boot, so this cannot fire on a device that has never synced — which
+    // is what stops a mis-set HEAP_MIN_* from turning into a reboot loop.
+    // health::boot_loop_tripped() backstops the rest.
 #if HEAP_LOW_REBOOT_CYCLES > 0
     {
       uint32_t low_cycles = wifi_sync::consecutive_low_heap_cycles();

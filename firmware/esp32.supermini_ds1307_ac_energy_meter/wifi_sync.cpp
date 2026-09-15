@@ -398,25 +398,44 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     uint32_t largest   = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     if (free_heap < HEAP_MIN_FREE_BYTES ||
         largest   < HEAP_MIN_LARGEST_BLOCK_BYTES) {
-      s_low_heap_cycles++;
+      if (s_last_successful_post_us == 0) {
+        // NEVER POSTED THIS BOOT, so the heap is as good as it is ever going to
+        // be — if it is already under the line, the LINE is wrong, not the heap,
+        // and no amount of deferring or rebooting will improve it. Post anyway.
+        //
+        // This exemption exists because the alternative was demonstrated in the
+        // field: a threshold set above at-rest free tripped on the first POST of
+        // every boot, three deferrals rebooted the device, and it never posted
+        // again — a ~2 minute reboot loop that also destroyed the only evidence
+        // that would have identified the bad threshold. A guard is for a heap
+        // that DEGRADED while running; a fresh boot that cannot clear it is a
+        // misconfiguration, and the recoverable failure is the right one to
+        // take. Deliberately does not touch s_low_heap_cycles, so the watchdog
+        // in the connectivity task cannot fire before a POST has ever landed.
+        LOG_PRINTF("[wifi] low heap at boot (free=%u largest=%u) — posting anyway; "
+                   "HEAP_MIN_* look wrong for this build\n",
+                      (unsigned)free_heap, (unsigned)largest);
+      } else {
+        s_low_heap_cycles++;
 #if HEAP_LOW_REBOOT_CYCLES > 0
-      // Skip the POST rather than drive a handshake into a starved heap. This is
-      // only safe BECAUSE the heap watchdog in the connectivity task will reboot
-      // us out of it: a C heap never compacts, so deferring is not itself a
-      // recovery. The rows stay buffered either way.
-      LOG_PRINTF("[wifi] low heap — deferring POST (free=%u largest=%u, %u in a row)\n",
-                    (unsigned)free_heap, (unsigned)largest,
-                    (unsigned)s_low_heap_cycles);
-      return false;
+        // Skip the POST rather than drive a handshake into a starved heap. This
+        // is only safe BECAUSE the heap watchdog in the connectivity task will
+        // reboot us out of it: a C heap never compacts, so deferring is not
+        // itself a recovery. The rows stay buffered either way.
+        LOG_PRINTF("[wifi] low heap — deferring POST (free=%u largest=%u, %u in a row)\n",
+                      (unsigned)free_heap, (unsigned)largest,
+                      (unsigned)s_low_heap_cycles);
+        return false;
 #else
-      // Reboot escalation is off, so deferring here would be a ONE-WAY TRIP —
-      // nothing would ever recover the device and it would go quiet for good.
-      // So report and POST anyway: a failed handshake is recoverable, a silent
-      // stop is not.
-      LOG_PRINTF("[wifi] low heap (free=%u largest=%u, %u in a row) — posting anyway\n",
-                    (unsigned)free_heap, (unsigned)largest,
-                    (unsigned)s_low_heap_cycles);
+        // Reboot escalation is off, so deferring here would be a ONE-WAY TRIP —
+        // nothing would ever recover the device and it would go quiet for good.
+        // So report and POST anyway: a failed handshake is recoverable, a silent
+        // stop is not.
+        LOG_PRINTF("[wifi] low heap (free=%u largest=%u, %u in a row) — posting anyway\n",
+                      (unsigned)free_heap, (unsigned)largest,
+                      (unsigned)s_low_heap_cycles);
 #endif
+      }
     } else {
       s_low_heap_cycles = 0;
     }
