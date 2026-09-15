@@ -365,6 +365,56 @@ uint32_t last_sync_at() {
   return s_state.getUInt("sync_at", 0);
 }
 
+uint32_t last_nightly_reboot_day() {
+  return s_state.getUInt("nrb_day", 0);
+}
+void set_last_nightly_reboot_day(uint32_t day) {
+  s_state.putUInt("nrb_day", day);
+}
+
+// ---- Server-pushed maintenance config --------------------------------------
+
+bool nightly_reboot_enabled() {
+  return s_cfg.getBool("nrb_en", NIGHTLY_REBOOT_ENABLE_DEFAULT != 0);
+}
+uint8_t nightly_reboot_start_hour() {
+  return s_cfg.getUChar("nrb_sh", NIGHTLY_REBOOT_START_HOUR_DEFAULT);
+}
+uint8_t nightly_reboot_end_hour() {
+  return s_cfg.getUChar("nrb_eh", NIGHTLY_REBOOT_END_HOUR_DEFAULT);
+}
+bool set_nightly_reboot(bool enabled, uint8_t start_hour, uint8_t end_hour) {
+  // The window must be a non-empty span inside one local day. Rejecting rather
+  // than clamping means a malformed push leaves the previous schedule intact.
+  if (start_hour > 23 || end_hour > 24 || end_hour <= start_hour) return false;
+  if (s_cfg.getBool ("nrb_en", NIGHTLY_REBOOT_ENABLE_DEFAULT != 0) != enabled)
+    s_cfg.putBool ("nrb_en", enabled);
+  if (s_cfg.getUChar("nrb_sh", NIGHTLY_REBOOT_START_HOUR_DEFAULT) != start_hour)
+    s_cfg.putUChar("nrb_sh", start_hour);
+  if (s_cfg.getUChar("nrb_eh", NIGHTLY_REBOOT_END_HOUR_DEFAULT) != end_hour)
+    s_cfg.putUChar("nrb_eh", end_hour);
+  return true;
+}
+
+uint32_t radio_rest_interval_sec() {
+  return s_cfg.getUInt("rr_int", RADIO_REST_INTERVAL_SEC_DEFAULT);
+}
+uint32_t radio_rest_duration_sec() {
+  return s_cfg.getUInt("rr_dur", RADIO_REST_DURATION_SEC_DEFAULT);
+}
+bool set_radio_rest(uint32_t interval_sec, uint32_t duration_sec) {
+  // 0 = periodic rest disabled; otherwise at least 10 min, so a mistyped value
+  // cannot put the radio off-air on a loop. Duration stays well under the
+  // stuck-Wi-Fi and stuck-BLE watchdogs.
+  if (interval_sec != 0 && (interval_sec < 600 || interval_sec > 86400)) return false;
+  if (duration_sec < 5 || duration_sec > 120) return false;
+  if (s_cfg.getUInt("rr_int", RADIO_REST_INTERVAL_SEC_DEFAULT) != interval_sec)
+    s_cfg.putUInt("rr_int", interval_sec);
+  if (s_cfg.getUInt("rr_dur", RADIO_REST_DURATION_SEC_DEFAULT) != duration_sec)
+    s_cfg.putUInt("rr_dur", duration_sec);
+  return true;
+}
+
 String ingest_host() {
   return s_cfg.getString("host", "");
 }
