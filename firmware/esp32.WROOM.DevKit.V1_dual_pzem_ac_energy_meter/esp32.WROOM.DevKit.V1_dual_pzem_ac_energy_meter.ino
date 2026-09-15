@@ -28,6 +28,7 @@
 #include "rtc.h"
 
 #include <esp_task_wdt.h>
+#include <esp_heap_caps.h>   // heap watchdog log line
 #include <esp_system.h>
 #include <esp_mac.h>
 #include "log_serial.h"
@@ -474,6 +475,14 @@ static void connectivity_task(void *) {
   // concurrently with no coexistence workaround. (On the single-core C3 this
   // same code shuts BLE down after the config window.)
   bool ble_off = false;
+  // Stuck-Wi-Fi escalation state (see the watchdog block below). Seconds spent
+  // ASSOCIATED without a successful POST; reset by a dropped link or a POST.
+  uint32_t stuck_wifi_sec   = 0;
+  uint32_t last_since_post  = UINT32_MAX;
+  bool     stuck_rest_tried = false;
+  bool     force_radio_rest = false;
+  // Timestamp of the last radio rest, periodic or forced.
+  uint64_t last_radio_rest_us = time_source::monotonic_us();
 
   for (;;) {
     esp_task_wdt_reset();
@@ -529,20 +538,100 @@ static void connectivity_task(void *) {
       }
     }
 
+    // ---- Radio rest --------------------------------------------------------
+    // Take Wi-Fi (and BLE advertising) off-air briefly, then bring them back and
+    // sync straight away. This is what breaks a stale association that
+    // try_connect_known()'s WL_CONNECTED fast path would otherwise reuse
+    // indefinitely, without paying for a reboot. See config.h for the why.
+    {
+      // The rest MECHANISM always runs: the stuck-Wi-Fi escalation below drives
+      // it through force_radio_rest, and that is the path that earns its keep.
+      // Only the blind periodic SCHEDULE is optional, so a server-pushed
+      // interval of 0 retires the timer WITHOUT disabling on-demand
+      // reassociation.
+      uint32_t rest_interval = storage::radio_rest_interval_sec();
+      bool periodic_rest_due =
+          rest_interval > 0 &&
+          (time_source::monotonic_us() - last_radio_rest_us) >=
+              (uint64_t)rest_interval * 1000000ULL;
+      // Defer past the deadline while a phone is connected rather than cutting
+      // the session off; the rest happens as soon as it disconnects.
+      if ((periodic_rest_due || force_radio_rest) &&
+          (ble_off || !ble_service::is_connected())) {
+        force_radio_rest = false;
+        uint32_t rest_dur = storage::radio_rest_duration_sec();
+        LOG_PRINTF("[health] radio rest: off-air for %u s\n", (unsigned)rest_dur);
+        // Only touch BLE while it is still up. After the config-window handoff
+        // (ble_off) the controller is shut down and these would be meaningless.
+        if (!ble_off) ble_service::pause_advertising();
+        wifi_sync::radio_off();
+
+        // Sleep the window out in 1 s slices so the task WDT keeps being fed and
+        // the sampling task keeps its slot. PZEM sampling and log writes are
+        // unaffected — rows buffer to LittleFS and ship on the next cycle.
+        for (uint32_t i = 0; i < rest_dur; ++i) {
+          esp_task_wdt_reset();
+          vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        wifi_sync::radio_on();
+        if (!ble_off) ble_service::resume_advertising();
+        LOG_PRINTLN("[health] radio rest over — reassociating");
+
+        last_radio_rest_us = time_source::monotonic_us();
+        // Don't wait out the rest of the normal WIFI_SCAN_INTERVAL_SEC tick;
+        // prove the new association immediately.
+        wifi_sync::request_immediate_sync();
+        // The rest deliberately took BLE off-air, so don't let that idle window
+        // count against the stuck-BLE watchdog below.
+        last_ble_alive_us = time_source::monotonic_us();
+      }
+    }
+
     // ---- Stuck-watchdog soft reboots ---------------------------------------
     // Independent of the 30 s task WDT — these catch the subtler case where
-    // every task is alive but the radio side is silently dead. Guarded by
-    // uptime so we never reboot in the first STUCK_*_REBOOT_SEC after boot.
-    if (uptime_sec > STUCK_WIFI_REBOOT_SEC) {
+    // every task is alive but the radio side is silently dead.
+
+    // Stuck-Wi-Fi accounting. This loop runs at 1 Hz, so the counter is in
+    // seconds. It advances ONLY while the station is associated: a device with
+    // no AP in range is not stuck, it is just offline, and counting that is what
+    // made the old watchdog reboot healthy units. Any POST landing drives
+    // seconds_since_last_successful_post() backwards, which is how a recovery is
+    // detected. A boot that has never posted is exempt, so a fresh or
+    // unprovisioned device never reboots itself — which is also why this needs
+    // no uptime guard.
+    {
       uint32_t since_post = wifi_sync::seconds_since_last_successful_post();
-      // UINT32_MAX = never posted -> don't reboot a brand-new / unprovisioned
-      // device. Only reboot if we *had* been syncing and now can't.
-      if (since_post != UINT32_MAX && since_post > STUCK_WIFI_REBOOT_SEC) {
-        LOG_PRINTF("[health] stuck-wifi watchdog: %u s since last POST, restarting\n",
-                   since_post);
-        delay(100);
-        esp_restart();
+      if (!wifi_sync::is_associated() || since_post == UINT32_MAX) {
+        stuck_wifi_sec = 0;        // offline, or nothing posted yet this boot
+        stuck_rest_tried = false;
+      } else if (since_post < last_since_post) {
+        stuck_wifi_sec = 0;        // a POST just landed
+        stuck_rest_tried = false;
+      } else {
+        stuck_wifi_sec++;          // associated, and still nothing gets through
       }
+      last_since_post = since_post;
+    }
+
+    // Escalation 1: reassociate. A stale association survives WL_CONNECTED, and
+    // a radio rest is the cheap cure — one sync interval, no reboot, uptime and
+    // boot_id preserved. Only tried once per stuck episode.
+#if STUCK_WIFI_REASSOC_SEC > 0
+    if (stuck_wifi_sec >= STUCK_WIFI_REASSOC_SEC && !stuck_rest_tried) {
+      LOG_PRINTF("[health] stuck-wifi: associated but no POST for %u s — forcing reassociation\n",
+                 (unsigned)stuck_wifi_sec);
+      stuck_rest_tried = true;
+      force_radio_rest = true;
+    }
+#endif
+
+    // Escalation 2: reboot, if reassociating did not help either.
+    if (stuck_wifi_sec >= STUCK_WIFI_REBOOT_SEC) {
+      LOG_PRINTF("[health] stuck-wifi watchdog: associated but no POST for %u s, restarting\n",
+                 (unsigned)stuck_wifi_sec);
+      delay(100);
+      esp_restart();
     }
 
     // Stuck-BLE watchdog only applies while BLE is meant to be alive. After the
@@ -554,6 +643,78 @@ static void connectivity_task(void *) {
                    (unsigned long long)(since_ble_us / 1000000ULL));
         delay(100);
         esp_restart();
+      }
+    }
+
+    // Heap watchdog. The guard in post_batch() stops the device driving a TLS
+    // handshake into a starved heap, but deferring is not recovery: nothing
+    // compacts a C heap, so once fragmentation has starved the large contiguous
+    // block mbedTLS needs, the device would defer forever while still showing
+    // "Wi-Fi connected". A reboot is the only cure, so escalate to one after
+    // HEAP_LOW_REBOOT_CYCLES consecutive deferrals. Reaching that count takes
+    // several Wi-Fi cycles, which is itself the guard against rebooting early in
+    // a boot; health::boot_loop_tripped() backstops the rest.
+#if HEAP_LOW_REBOOT_CYCLES > 0
+    {
+      uint32_t low_cycles = wifi_sync::consecutive_low_heap_cycles();
+      if (low_cycles >= HEAP_LOW_REBOOT_CYCLES) {
+        LOG_PRINTF("[health] heap watchdog: %u consecutive low-heap cycles "
+                   "(free=%u largest=%u), restarting\n",
+                   (unsigned)low_cycles,
+                   (unsigned)esp_get_free_heap_size(),
+                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        delay(100);
+        esp_restart();
+      }
+    }
+#endif
+
+    // ---- Nightly scheduled reboot ------------------------------------------
+    // Once a local calendar day, inside the configured window, for a fresh heap
+    // and fresh radio stacks. See the NIGHTLY_REBOOT_* block in config.h.
+    if (storage::nightly_reboot_enabled()) {
+      uint32_t up_sec = (uint32_t)(time_source::monotonic_us() / 1000000ULL);
+      uint32_t today  = time_source::local_day_number();   // 0 = clock unknown
+      if (today != 0 && time_source::wall_clock_known() &&
+          up_sec >= NIGHTLY_REBOOT_MIN_UPTIME_SEC &&
+          today != storage::last_nightly_reboot_day()) {
+        uint8_t start_h = storage::nightly_reboot_start_hour();
+        uint8_t end_h   = storage::nightly_reboot_end_hour();
+        int span_min    = (int)(end_h - start_h) * 60;
+        // Per-device offset into the window, MAC-derived so it is stable across
+        // boots and different on every unit — a fleet returns staggered rather
+        // than all at once. Recomputed if the server moves the window, since the
+        // offset is taken modulo the window's width.
+        static int s_target_min  = -1;
+        static int s_target_span = -1;
+        if (s_target_min < 0 || s_target_span != span_min) {
+          uint8_t mac[6] = {0};
+          esp_read_mac(mac, ESP_MAC_WIFI_STA);
+          uint32_t h = ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
+          s_target_min  = (int)(h % (uint32_t)span_min);
+          s_target_span = span_min;
+        }
+        time_t now_wall = time_source::wall_time();
+        struct tm lt;
+        localtime_r(&now_wall, &lt);
+        bool in_window = lt.tm_hour >= start_h && lt.tm_hour < end_h;
+        int win_min = (lt.tm_hour - start_h) * 60 + lt.tm_min;
+        // >= rather than == so a missed minute (the task can be busy inside a
+        // sync cycle) still fires later in the window instead of skipping the
+        // night entirely.
+        if (in_window && win_min >= s_target_min &&
+            (ble_off || !ble_service::is_connected()) &&
+            !wifi_sync::is_radio_busy()) {
+          // Record the day BEFORE restarting, or the new boot would land back
+          // inside the window and reboot again.
+          storage::set_last_nightly_reboot_day(today);
+          LOG_PRINTF("[health] nightly reboot at %02d:%02d local "
+                     "(window %02u:00-%02u:00, this device +%d min)\n",
+                     lt.tm_hour, lt.tm_min,
+                     (unsigned)start_h, (unsigned)end_h, s_target_min);
+          delay(100);   // let the NVS write and the log line settle
+          esp_restart();
+        }
       }
     }
 

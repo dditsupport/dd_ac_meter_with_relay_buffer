@@ -60,6 +60,12 @@
 // resync twice a day rather than hourly — that also cuts configTzTime() calls
 // from 24 a day to 2, which is worth having while the heap is under suspicion.
 #define NTP_RESYNC_INTERVAL_SEC 43200     // 12 h — twice a day, after a success
+// Retry sooner than that after a FAILED attempt. The freshness gate above is
+// driven by the last SUCCESS, so on its own it let a device that could not
+// reach an NTP server retry on every single Wi-Fi cycle. This rate-limits the
+// ATTEMPT, so a device that boots without a clock is not stuck waiting half a
+// day for its second try either.
+#define NTP_RETRY_INTERVAL_SEC  900       // 15 min — after a failed attempt
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define HTTP_TIMEOUT_MS         10000    // response read
 
@@ -111,34 +117,61 @@
 #define WIFI_PAUSE_BLE_DURING_SYNC 0
 #define BLE_CONFIG_WINDOW_SEC      0
 
-// ---------- Heap guard (TLS POST) ----------
+// ---------- Heap guard + heap watchdog (TLS POST) ----------
 // A TLS handshake needs one large CONTIGUOUS allocation for mbedTLS's record
 // buffers, which makes it the first thing here to fail as the heap fragments —
-// long before TOTAL free memory looks alarming. So post_batch() checks BOTH
-// numbers before opening the connection and defers the POST when either is
-// short; the rows stay buffered. Both are logged after every POST so they can
-// be tuned to what a board actually runs at.
+// long before TOTAL free memory looks alarming. post_batch() therefore checks
+// BOTH numbers before opening the connection.
 //
-// FIELD DATA (meter-53dcbc, 23 days on an always-on link) says the previous
-// pair — free 45000 / largest 40000 — was the problem, not the protection. A
-// 40 KB largest-block floor sits far above the ~16 KB contiguous block mbedTLS
-// actually needs, so ordinary fragmentation crossed it while the board was
-// still healthy. And deferring RECOVERS NOTHING: a C heap never compacts, so
-// once under the line the device defers every POST until something reboots it.
-// The only thing that ever did was the 6 h stuck-Wi-Fi watchdog — which is why
-// all 13 outages in that window lasted 6.04 h to the second and each ended with
-// a single catch-up POST of 67-72 rows.
+// Deferring RECOVERS NOTHING on its own: a C heap never compacts, so once under
+// the line the device would defer every POST forever while still showing
+// "Wi-Fi connected". That is why each deferral is counted and the heap watchdog
+// in the connectivity task reboots at HEAP_LOW_REBOOT_CYCLES. The two belong
+// together — post_batch() deliberately POSTS ANYWAY when the reboot escalation
+// is off, because a failed handshake is recoverable and a silent stop is not.
 //
-// 20000 still refuses a genuinely starved heap (~20% above what mbedTLS needs)
-// while clearing normal fragmentation. 55000 comes from the measured cost of a
-// live TLS session (~48 KB) against ~72 KB free at rest, so the guard fires
-// while there is still enough headroom to notice.
+// MEASURED on solar-2e5694: 618 samples over three boots. `free - min` across
+// every sample once the low-water mark is set is 57.1-60.0 KB, median 58.9 —
+// that is what a POST actually costs at its peak, more than the ~48 KB a live
+// session holds, because the handshake peaks higher than the steady session.
+// So the floor is ~59 KB free and 62000 leaves ~3 KB of warning above it. The
+// largest-block figure stays modest because mbedTLS spreads its allocation over
+// many blocks rather than one, the biggest being its ~16 KB record buffer.
+#define HEAP_MIN_FREE_BYTES          62000
+#define HEAP_MIN_LARGEST_BLOCK_BYTES 20000
+
+// Consecutive heap-guard deferrals before the connectivity task reboots.
+// 0 = measure and report only: post_batch() then logs the low-heap line and
+// POSTS ANYWAY rather than deferring into a state nothing can recover from.
 //
-// These bound the failure; they do not cure it. A deferral is still permanent
-// until a reboot. Closing that needs a deferral counter that reboots after N
-// consecutive skips, which is not implemented yet.
-#define WIFI_MIN_FREE_HEAP_BYTES     55000
-#define WIFI_MIN_LARGEST_BLOCK_BYTES 20000
+// Enabled on evidence: the same 618 samples showed a steady 35.2 B lost per
+// POST with heap_largest pinned at 47092 throughout — a LEAK, not fragmentation
+// — and one boot finishing 2136 B above the floor. The nightly reboot beat
+// exhaustion by about two hours, which is luck rather than margin.
+//
+// Why 3: a deferral leaves the rows buffered, so the next cycle still has work
+// and re-tests the guard every WIFI_SCAN_INTERVAL_SEC. Three in a row is ~6
+// minutes — fast enough to act, long enough that one odd reading cannot trigger
+// it. The measured decline is smooth and monotonic, so there are no transient
+// dips to ride out. At a 900 s log interval the nightly reboot always gets
+// there first and this never fires; at shorter bench intervals it is what stops
+// the device wedging before 04:00.
+#define HEAP_LOW_REBOOT_CYCLES       3
+
+// ---------- Heap leak tracing ----------
+// Breaks a Wi-Fi cycle into its phases and reports the heap delta of each
+// (idle / connect / ntp / post / net), so whichever column trends negative over
+// many cycles owns the leak. Single-cycle values are noisy — the sign of the
+// AVERAGE is the signal. Costs three heap reads per cycle; keep it on until the
+// leak above is attributed.
+#define HEAP_TRACE_CYCLE        1
+
+// Stage-by-stage heap accounting INSIDE the POST: ctor, begin, post, read, end,
+// dtor, six deltas that sum to dpost. 0 — the bisection is done. It found that
+// http.end() returns exactly 0 bytes; the whole TLS allocation stays held until
+// the destructors run, which is why the client is explicitly scoped in
+// post_batch(). Set back to 1 only if the POST needs re-investigating.
+#define HEAP_TRACE_POST         0
 
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
@@ -156,6 +189,15 @@
 // memory than the one that had just failed. 25 keeps the peak near 4 KB, at the
 // cost of more frequent but individually cheaper POSTs.
 #define SYNC_BATCH_SIZE         25        // rows per POST
+
+// Size of the static request-body buffer in wifi_sync.cpp. Must exceed the
+// largest body SYNC_BATCH_SIZE can produce (~5 KB worst case at 25 rows with a
+// full MAX_BOOT_HISTORY). post_batch() measures the document first and refuses
+// to POST rather than truncate into invalid JSON, so raising SYNC_BATCH_SIZE
+// means raising this too. Lives in .bss: costs a fixed 8 KB of DRAM and removes
+// a per-cycle heap allocation that was built through hundreds of reallocations
+// — the single largest source of fragmentation in the connectivity task.
+#define POST_BODY_BUF_BYTES     8192
 #define MAX_BOOT_HISTORY        32        // circular buffer entries
 #define MAX_WIFI_CREDS          1         // only one network at a time
 #define SEQ_HWM_STRIDE          10        // NVS write batching for last_seq
@@ -189,13 +231,91 @@
 // "Stuck" watchdogs. Independent of the task WDT (which catches frozen
 // tasks within 30 s) — these catch the subtler failure modes where every
 // task keeps running but the radio is silently dead.
-//   STUCK_WIFI: time since last successful ingest POST. Only trips after
-//               at least one successful POST has ever happened — so a
-//               brand-new device with no Wi-Fi credentials won't reboot.
-//   STUCK_BLE:  time since BLE was last 'alive' (advertising or connected).
-//               Trips only if NimBLE wedged so badly that advertising stops.
-#define STUCK_WIFI_REBOOT_SEC   21600     // 6 h
+//
+// ---------- Stuck-Wi-Fi escalation ----------
+// FIELD DATA (meter-53dcbc, 23 days): the old rule — "no successful POST for
+// 6 h => the radio is wedged, reboot" — was the ONLY thing recovering this
+// device, and it took six hours to do it. Thirteen of fourteen reboots in that
+// window were preceded by a POST blackout of exactly 6.04 h, each ending with a
+// single catch-up POST of 67-72 rows. 14.7% of that device's rows arrived late,
+// mean 2.75 h.
+//
+// The counter now advances ONLY while WiFi.isConnected(), and resets whenever
+// the link drops or a POST lands. That matters in both directions: on a device
+// synced from a phone hotspot, ordinary offline time used to trip it and reboot
+// a perfectly healthy unit; and because it can no longer be tripped by being
+// offline, the thresholds are safe to make aggressive.
+//
+// Escalation, cheapest first:
+//   STUCK_WIFI_REASSOC_SEC — force a radio rest, i.e. a full reassociation with
+//     a fresh DHCP lease and DNS servers. A stale association that survives
+//     WL_CONNECTED is the usual cause, and this costs one sync interval instead
+//     of a reboot: uptime, boot_id and the buffered log all survive. 0 disables.
+//   STUCK_WIFI_REBOOT_SEC  — if reassociating did not help either, reboot.
+// A boot that has never posted at all is exempt from both, so a fresh or
+// unprovisioned device never reboots itself.
+#define STUCK_WIFI_REASSOC_SEC  600       // 10 min associated, nothing posted
+#define STUCK_WIFI_REBOOT_SEC   1800      // 30 min associated, nothing posted
 #define STUCK_BLE_REBOOT_SEC    43200     // 12 h
+
+// ---------- Nightly scheduled reboot ----------
+// Reboot once a day in the small hours for a clean slate: fresh heap — the one
+// resource that never heals on its own, since nothing compacts a C heap — plus
+// fresh Wi-Fi and BLE stacks and every counter and timer reset.
+//
+// Nothing is lost. Buffered rows live in LittleFS and ship on the next sync;
+// boot_id, seq and the log cursor are all in NVS. The cost is a few seconds of
+// downtime and the first log row of the new boot arriving one log interval late.
+//
+// The exact minute inside the window is derived from the device MAC, so a fleet
+// spreads itself across the window instead of every unit rebooting on the same
+// second and stampeding the ingest endpoint when they all come back.
+//
+// Fires at most once per local calendar day. The day it last fired is recorded
+// in NVS, NOT in RAM — otherwise the reboot it causes would clear the flag and
+// it would fire again a second later, in a loop. It also requires a trusted wall
+// clock (no clock, no schedule), skips a device that booted less than
+// NIGHTLY_REBOOT_MIN_UPTIME_SEC ago, and defers while a phone is connected over
+// BLE or a sync is in flight, retrying each second until the window closes.
+//
+// DEFAULTS ONLY. The live values live in NVS and are pushed by the server on any
+// ingest response (nightly_reboot_enable / nightly_reboot_start_hour /
+// nightly_reboot_end_hour), so the window can be moved across a fleet without
+// reflashing. These apply only until the server first says otherwise.
+#define NIGHTLY_REBOOT_ENABLE_DEFAULT       1
+#define NIGHTLY_REBOOT_START_HOUR_DEFAULT   4     // local time, inclusive
+#define NIGHTLY_REBOOT_END_HOUR_DEFAULT     5     // local time, exclusive
+// Compile-time only: an internal safety rail, not an ops knob.
+#define NIGHTLY_REBOOT_MIN_UPTIME_SEC 600   // don't reboot a device that just booted
+
+// ---------- Periodic radio rest ----------
+// Every storage::radio_rest_interval_sec() the connectivity task takes the radio
+// off-air for radio_rest_duration_sec(): the STA is disassociated and the Wi-Fi
+// PHY powered down, and BLE advertising stopped. Both then come back and a sync
+// runs immediately on the fresh link.
+//
+// Why: try_connect_known() reuses an existing association whenever
+// WiFi.status() reports WL_CONNECTED, and run_cycle() only tears the link down
+// when that function fails. So if the STA is left holding a STALE association
+// after the AP restarts — routine with a phone hotspot: screen off, band
+// switch, DHCP renewal, a carrier blip — every POST fails at DNS/TCP while the
+// driver still reports "connected", and nothing forces a reassociation.
+//
+// No data is lost across a rest: the sampling task keeps writing rows to
+// LittleFS throughout and they ship on the cycle that follows. The rest is
+// deferred while a phone is connected over BLE, so a provisioning session is
+// never cut off mid-way.
+//
+// An interval of 0 (the default) retires the PERIODIC TIMER ONLY; the rest
+// MECHANISM stays compiled and the stuck-Wi-Fi escalation above still forces one
+// on demand, which is the path that earns its keep — it reassociates only when
+// the device is demonstrably associated-but-not-posting, instead of going
+// off-air on a schedule on the chance something is wrong. Give this a non-zero
+// interval only if field logs show stale associations the on-demand path misses.
+// Both are server-pushable (radio_rest_interval_sec / radio_rest_duration_sec)
+// and cached in NVS; these defaults apply only until the server first speaks.
+#define RADIO_REST_INTERVAL_SEC_DEFAULT 0    // periodic rest off; on-demand still active
+#define RADIO_REST_DURATION_SEC_DEFAULT 45   // seconds fully off-air (<= 120)
 
 // ---------- Pin map (ESP32 DevKit V1) ----------
 // PIN RULE: use only the pins broken out on the LEFT and RIGHT headers. Never

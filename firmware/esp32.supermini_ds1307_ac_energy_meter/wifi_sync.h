@@ -44,4 +44,25 @@ uint32_t scan_results_version();
 // in the connectivity task.
 uint32_t seconds_since_last_successful_post();
 
+// Consecutive Wi-Fi cycles whose POST the heap guard deferred because free heap
+// or the largest contiguous free block was below the HEAP_MIN_* thresholds in
+// config.h. Reset to 0 by any cycle with a healthy heap. The heap watchdog in
+// the connectivity task reboots once this reaches HEAP_LOW_REBOOT_CYCLES —
+// deferring alone cannot recover a fragmented heap, only a reboot can.
+uint32_t consecutive_low_heap_cycles();
+
+// True while the station is actually associated with an AP. The stuck-Wi-Fi
+// escalation in the connectivity task gates on this so that ordinary offline
+// time — no AP in range — is never mistaken for a wedged radio.
+bool is_associated();
+
+// Radio rest (see RADIO_REST_* in config.h). radio_off() disassociates the STA
+// and powers the Wi-Fi PHY down; radio_on() brings the interface back up in STA
+// mode. Because the STA returns unassociated, the next try_connect_known()
+// takes the full scan + WiFi.begin() path instead of the WL_CONNECTED fast
+// path, which is the whole point: a fresh association means a fresh DHCP lease
+// and fresh DNS servers. Called only from the connectivity task's rest window.
+void radio_off();
+void radio_on();
+
 }  // namespace wifi_sync
