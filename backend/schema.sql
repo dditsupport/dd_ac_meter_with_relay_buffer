@@ -40,10 +40,12 @@ CREATE TABLE IF NOT EXISTS ed_energy_devices (
   capacity_kw     DECIMAL(12,2) NULL,
   notes           TEXT         NULL,
   owner_user_id   INT UNSIGNED NULL,
-  -- App-side BLE access PIN. Auto-generated at registration; the firmware
-  -- never sees it. The Android app caches authorised PINs at login and gates
-  -- BLE access locally.
-  ble_pin         VARCHAR(12)  NULL,
+  -- App-side BLE access PIN. Stamped with the fixed default below at
+  -- registration so an installer can open a new meter from the app right away;
+  -- an admin changes it per device afterwards (see DEFAULT_BLE_PIN in
+  -- api/_db.php). The firmware never sees it — the Android app caches
+  -- authorised PINs at login and gates BLE access locally.
+  ble_pin         VARCHAR(12)  NULL DEFAULT '112233',
   first_seen_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_owner    (owner_user_id),
   KEY idx_location (location),

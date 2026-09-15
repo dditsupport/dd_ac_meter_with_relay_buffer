@@ -61,13 +61,14 @@ try {
     $existing = $st->fetch();
 
     if (!$existing) {
-        // Brand new device — register and claim in one shot, with a BLE PIN.
+        // Brand new device — register and claim in one shot, with the default
+        // BLE PIN (see default_ble_pin(); an admin can change it afterwards).
         $effective_name = $friendly !== '' ? $friendly : $device_id;
         $pdo->prepare(
             'INSERT INTO ed_energy_devices
                  (device_id, friendly_name, location, capacity_kw, notes, owner_user_id, ble_pin)
              VALUES (?, ?, ?, ?, ?, ?, ?)'
-        )->execute([$device_id, $effective_name, $location, $capacity_kw, $notes, (int)$user['id'], gen_ble_pin()]);
+        )->execute([$device_id, $effective_name, $location, $capacity_kw, $notes, (int)$user['id'], default_ble_pin()]);
         $created = true;
     } else {
         $owner = $existing['owner_user_id'];

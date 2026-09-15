@@ -90,13 +90,16 @@ if (!$device_token_ok && $session_user) {
 }
 
 // Auto-register the device. owner_user_id stays NULL until an admin binds it.
-// New rows get a random BLE access PIN; INSERT IGNORE leaves an existing
-// device's PIN untouched. Guarded so a DB without the ble_pin column (pre
-// migration 004) still ingests.
+// New rows get the default BLE access PIN (see default_ble_pin()), so an
+// installer can open a freshly flashed meter from the app without waiting for
+// someone to read a random PIN out of the admin UI. INSERT IGNORE leaves an
+// existing device's PIN untouched, so this never overwrites a PIN an admin has
+// already changed. Guarded so a DB without the ble_pin column (pre migration
+// 004) still ingests.
 try {
     $pdo->prepare(
         'INSERT IGNORE INTO ed_energy_devices (device_id, friendly_name, ble_pin) VALUES (?, ?, ?)'
-    )->execute([$device_id, $device_id, gen_ble_pin()]);
+    )->execute([$device_id, $device_id, default_ble_pin()]);
 } catch (Throwable $e) {
     $pdo->prepare(
         'INSERT IGNORE INTO ed_energy_devices (device_id, friendly_name) VALUES (?, ?)'
