@@ -466,14 +466,26 @@ static void connectivity_task(void *) {
     esp_task_wdt_reset();
     uint64_t now_us = time_source::monotonic_us();
     uint64_t uptime_sec = now_us / 1000000ULL;
+#if BLE_CONFIG_WINDOW_SEC == 0
+    // The BLE config window is the only reader of uptime_sec here, and it is
+    // compiled out on builds with no handoff (the WROOMs). The stuck-Wi-Fi
+    // watchdog used to read it too, but it is association-gated now and needs
+    // no uptime guard.
+    (void)uptime_sec;
+#endif
 
     if (!ble_off) {
       ble_service::tick();
       if (ble_service::is_alive()) last_ble_alive_us = now_us;
     }
 
+    // Is Wi-Fi permitted to be on the air at all right now? False during the C3's
+    // BLE config window (before the handoff) and in boot-loop BLE-only mode.
+    // Hoisted out of the block below because the radio rest has to honour it
+    // too — see there.
+    bool wifi_allowed = false;
+
     if (!health::boot_loop_tripped()) {
-      bool wifi_allowed;
 #if BLE_CONFIG_WINDOW_SEC > 0
       if (!ble_off && uptime_sec >= (uint64_t)BLE_CONFIG_WINDOW_SEC) {
         // Config window is over, but if the app is still connected, don't cut it
@@ -535,7 +547,13 @@ static void connectivity_task(void *) {
               (uint64_t)rest_interval * 1000000ULL;
       // Defer past the deadline while a phone is connected rather than cutting
       // the session off; the rest happens as soon as it disconnects.
-      if ((periodic_rest_due || force_radio_rest) &&
+      // Only ever rest a radio that is allowed to be on. radio_on() ends with
+      // WiFi.mode(WIFI_STA), so without this a server-pushed rest interval would
+      // bring Wi-Fi up during the C3's BLE-only config window, or in boot-loop
+      // BLE-only mode — defeating the handoff this build exists to enforce and
+      // putting both radios on the air together, which is the coexistence crash
+      // it is there to avoid.
+      if (wifi_allowed && (periodic_rest_due || force_radio_rest) &&
           (ble_off || !ble_service::is_connected())) {
         force_radio_rest = false;
         uint32_t rest_dur = storage::radio_rest_duration_sec();
