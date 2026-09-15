@@ -311,7 +311,7 @@
 // Both are server-pushable (radio_rest_interval_sec / radio_rest_duration_sec)
 // and cached in NVS; these defaults apply only until the server first speaks.
 #define RADIO_REST_INTERVAL_SEC_DEFAULT 0    // periodic rest off; on-demand still active
-#define RADIO_REST_DURATION_SEC_DEFAULT 45   // seconds fully off-air (<= 120)
+#define RADIO_REST_DURATION_SEC_DEFAULT 45   // seconds fully off-air (<= 60)
 
 // ---------- Pin map (ESP32 DevKit V1) ----------
 // PIN RULE: use only the pins broken out on the LEFT and RIGHT headers. Never

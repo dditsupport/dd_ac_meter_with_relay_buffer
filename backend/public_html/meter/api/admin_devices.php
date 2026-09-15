@@ -4,6 +4,8 @@
 //   action=bind           -> assign owner_user_id to a device (or null to unbind)
 //   action=rename         -> set friendly_name / location / capacity_kw / notes
 //   action=set_interval   -> override ed_device_meta.log_interval_sec (0 = use default)
+//   action=set_maintenance-> override the nightly-reboot window and radio rest
+//                            (blank field = clear the override, use the fleet default)
 //   action=regen_pin      -> generate a new random BLE access PIN, returns it
 //   action=set_pin        -> set a specific BLE access PIN (6 digits), returns it
 //   action=delete         -> delete device + all its readings (cascades)
@@ -83,6 +85,65 @@ case 'set_interval':
          ON DUPLICATE KEY UPDATE log_interval_sec = VALUES(log_interval_sec)'
     )->execute([$device_id, $sec ?: 900]);
     json_response(200, ['ok' => true]);
+
+case 'set_maintenance':
+    // Nightly reboot window + periodic radio rest, pushed on the device's next
+    // ingest response. Every field is optional: an EMPTY string clears the
+    // override so the device falls back to the fleet default in api/_db.php,
+    // which is what "blank means don't manage this device" means in the UI.
+    // A present value is validated against the same bounds the firmware uses,
+    // so a bad entry is refused here instead of being stored and then silently
+    // ignored by every device that receives it.
+    $device_id = (string)($_POST['device_id'] ?? '');
+    if ($device_id === '') json_response(400, ['ok' => false, 'error' => 'bad_input']);
+
+    $fields = ['nightly_reboot_enable', 'nightly_reboot_start_hour', 'nightly_reboot_end_hour',
+               'radio_rest_interval_sec', 'radio_rest_duration_sec'];
+    $set = [];
+    $vals = [];
+    foreach ($fields as $f) {
+        if (!array_key_exists($f, $_POST)) continue;      // field not submitted: leave as is
+        $raw = trim((string)$_POST[$f]);
+        if ($raw === '') {                                 // blank: clear the override
+            $set[] = "$f = NULL";
+            continue;
+        }
+        if (!preg_match('/^-?[0-9]+$/', $raw)) {
+            json_response(400, ['ok' => false, 'error' => "not_a_number:$f"]);
+        }
+        $v = (int)$raw;
+        if (!maintenance_value_ok($f, $v)) {
+            json_response(400, ['ok' => false, 'error' => "out_of_range:$f"]);
+        }
+        $set[]  = "$f = ?";
+        $vals[] = $v;
+    }
+    if (!$set) json_response(400, ['ok' => false, 'error' => 'nothing_to_set']);
+
+    // The window must be a non-empty span inside one local day. Check the
+    // EFFECTIVE pair — one hour submitted, the other already stored — so a
+    // half-update cannot leave an unusable window behind.
+    $eff = device_maintenance_config($pdo, $device_id);
+    $start = array_key_exists('nightly_reboot_start_hour', $_POST) && trim((string)$_POST['nightly_reboot_start_hour']) !== ''
+        ? (int)$_POST['nightly_reboot_start_hour'] : (int)($eff['nightly_reboot_start_hour'] ?? DEFAULT_NIGHTLY_REBOOT_START_HOUR);
+    $end = array_key_exists('nightly_reboot_end_hour', $_POST) && trim((string)$_POST['nightly_reboot_end_hour']) !== ''
+        ? (int)$_POST['nightly_reboot_end_hour'] : (int)($eff['nightly_reboot_end_hour'] ?? DEFAULT_NIGHTLY_REBOOT_END_HOUR);
+    if ($end <= $start) {
+        json_response(400, ['ok' => false, 'error' => 'reboot_window_empty']);
+    }
+
+    // The row may not exist yet (device registered but never synced).
+    $pdo->prepare('INSERT IGNORE INTO ed_device_meta (device_id) VALUES (?)')->execute([$device_id]);
+    try {
+        $vals[] = $device_id;
+        $pdo->prepare('UPDATE ed_device_meta SET ' . implode(', ', $set) . ' WHERE device_id = ?')
+            ->execute($vals);
+    } catch (Throwable $e) {
+        // Columns absent => migration 014 has not been applied on this DB.
+        json_response(500, ['ok' => false, 'error' => 'migration_014_required']);
+    }
+    json_response(200, ['ok' => true,
+                        'config' => maintenance_config_for_response(device_maintenance_config($pdo, $device_id))]);
 
 case 'regen_pin':
     $device_id = (string)($_POST['device_id'] ?? '');
