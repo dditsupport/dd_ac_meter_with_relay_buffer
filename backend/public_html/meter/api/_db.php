@@ -67,7 +67,43 @@ function app_tz_offset(): string {
     return sprintf('%s%02d:%02d', $sign, intdiv($sec, 3600), intdiv($sec % 3600, 60));
 }
 
-/** Generate a random 6-digit BLE access PIN (zero-padded), e.g. "048213". */
+// The BLE access PIN a device is stamped with when it first registers —
+// whether it auto-registers on its first ingest POST or is claimed from the
+// app. Deliberately a FIXED, known value rather than a random one: an
+// installer commissioning a meter in the field needs to open it over BLE
+// before anyone has looked it up in the admin UI, and a per-device random PIN
+// made that a two-person job.
+//
+// The trade-off is real: until an admin changes it, every new device answers
+// to the same PIN, so this is a convenience gate and not a security boundary.
+// BLE_PRESHARED_KEY in the firmware is what actually authenticates a
+// connection; this PIN only gates the app's own device list. Change a device's
+// PIN from the admin UI (Set, or the ↻ to randomise) once it is installed.
+//
+// Overridable from secrets.php if a deployment wants a different default.
+if (!defined('DEFAULT_BLE_PIN')) {
+    define('DEFAULT_BLE_PIN', '112233');
+}
+
+/**
+ * The BLE access PIN a newly registered device starts with.
+ *
+ * Falls back to the built-in default if secrets.php overrode DEFAULT_BLE_PIN
+ * with something that isn't six digits — the Android app's PIN field is
+ * digits-only, so a malformed default would lock the owner out of their own
+ * meter with no way to type the PIN that would open it.
+ */
+function default_ble_pin(): string {
+    $pin = (string)DEFAULT_BLE_PIN;
+    return preg_match('/^[0-9]{6}$/', $pin) === 1 ? $pin : '112233';
+}
+
+/**
+ * Generate a RANDOM 6-digit BLE access PIN (zero-padded), e.g. "048213".
+ *
+ * Only used by the admin UI's regenerate (↻) action — registration uses
+ * default_ble_pin() instead.
+ */
 function gen_ble_pin(): string {
     return str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 }

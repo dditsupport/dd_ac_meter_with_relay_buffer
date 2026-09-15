@@ -53,15 +53,37 @@
 #define SAMPLE_INTERVAL_MS       1000     // 1 Hz PZEM sample cadence
 #define WIFI_SCAN_INTERVAL_SEC  120       // 2 minutes between Wi-Fi cycles
 #define NTP_SYNC_TIMEOUT_MS     5000
-#define NTP_RESYNC_INTERVAL_SEC 3600      // re-hit the NTP server at most every 1 h
+// NTP is a convenience here, not the time source of record: the DS1307 holds
+// the clock, the Android app sets it over BLE, and the ingest response carries
+// server_time as a third fallback. Over 12 h even an uncompensated DS1307 stays
+// within a couple of seconds, which is nothing against a 300 s log interval. So
+// resync twice a day rather than hourly — that also cuts configTzTime() calls
+// from 24 a day to 2, which is worth having while the heap is under suspicion.
+#define NTP_RESYNC_INTERVAL_SEC 43200     // 12 h — twice a day, after a success
 #define WIFI_CONNECT_TIMEOUT_MS 15000
-#define HTTP_TIMEOUT_MS         10000
-// TLS handshake cap (seconds). WiFiClientSecure defaults to 120 s, so on a
-// marginal link a stalled handshake blocks the connectivity task far past the
-// ~30 s task watchdog, which then aborts and reboots the chip (seen on the
-// Super Mini as a recurring `task_wdt: conn` panic). Capping it well under the
-// WDT lets a bad handshake fail fast so post_batch() just retries next cycle.
-#define TLS_HANDSHAKE_TIMEOUT_S 12
+#define HTTP_TIMEOUT_MS         10000    // response read
+
+// TCP connect and TLS handshake caps for the ingest POST.
+//
+// WDT BUDGET. health::begin() installs a 30 s task watchdog with
+// trigger_panic = true. The connectivity task feeds it immediately before the
+// POST, so the POST is the longest single unfed span and its three phases have
+// to stay clear of 30 s:
+//     TCP_CONNECT_TIMEOUT_MS   5 s
+//   + TLS_HANDSHAKE_TIMEOUT_S  8 s
+//   + HTTP_TIMEOUT_MS         10 s
+//   = 23 s, leaving ~7 s of margin.
+// The previous values (connect 10 s via HTTP_TIMEOUT_MS, handshake 12 s, read
+// 10 s) summed to 32 s — OVER the watchdog — so a POST that hit all three caps
+// panicked the chip instead of failing cleanly. Raising any of these three
+// means re-checking that sum against the 30 s in health.cpp.
+//
+// Both caps are needed: WiFiClientSecure leaves the handshake at 120 s by
+// default, and HTTPClient's connect timeout is separate from its response-read
+// timeout. A handshake that fails fast just retries next cycle, costing one
+// sync interval; one that runs long costs a reboot.
+#define TCP_CONNECT_TIMEOUT_MS  5000
+#define TLS_HANDSHAKE_TIMEOUT_S 8
 
 // Wi-Fi TX power, in quarter-dBm units — the ESP32 wifi_power_t enum values are
 // exactly dBm*4 (19.5 dBm = 78, 13 dBm = 52, 11 dBm = 44). Kept as a plain
@@ -90,21 +112,33 @@
 #define BLE_CONFIG_WINDOW_SEC      0
 
 // ---------- Heap guard (TLS POST) ----------
-// A TLS handshake needs a large contiguous allocation for mbedTLS's buffers. If
-// free memory — or the largest free block — has dropped too low, post_batch()
-// defers the POST (rows stay buffered, retried next cycle) rather than risking
-// an OOM-time hard fault. Both numbers are logged after every POST so they can
-// be tuned to what this board actually runs at.
-#define WIFI_MIN_FREE_HEAP_BYTES     45000
-#define WIFI_MIN_LARGEST_BLOCK_BYTES 40000
-
-// ---------- ROM / panic log visibility ----------
-// log_serial::init() can silence ets_printf / ROM putchar output to keep the
-// console clean of the Wi-Fi PHY's high-bit garbage. But that same path carries
-// the panic reason line ("CORRUPT HEAP: ...", "assert failed ...", "Guru
-// Meditation ..."), so silencing it hides *why* a crash happened. 1 = quiet
-// production console; set to 0 while diagnosing a crash to see the reason.
-#define ROM_LOG_QUIET           1
+// A TLS handshake needs one large CONTIGUOUS allocation for mbedTLS's record
+// buffers, which makes it the first thing here to fail as the heap fragments —
+// long before TOTAL free memory looks alarming. So post_batch() checks BOTH
+// numbers before opening the connection and defers the POST when either is
+// short; the rows stay buffered. Both are logged after every POST so they can
+// be tuned to what a board actually runs at.
+//
+// FIELD DATA (meter-53dcbc, 23 days on an always-on link) says the previous
+// pair — free 45000 / largest 40000 — was the problem, not the protection. A
+// 40 KB largest-block floor sits far above the ~16 KB contiguous block mbedTLS
+// actually needs, so ordinary fragmentation crossed it while the board was
+// still healthy. And deferring RECOVERS NOTHING: a C heap never compacts, so
+// once under the line the device defers every POST until something reboots it.
+// The only thing that ever did was the 6 h stuck-Wi-Fi watchdog — which is why
+// all 13 outages in that window lasted 6.04 h to the second and each ended with
+// a single catch-up POST of 67-72 rows.
+//
+// 20000 still refuses a genuinely starved heap (~20% above what mbedTLS needs)
+// while clearing normal fragmentation. 55000 comes from the measured cost of a
+// live TLS session (~48 KB) against ~72 KB free at rest, so the guard fires
+// while there is still enough headroom to notice.
+//
+// These bound the failure; they do not cure it. A deferral is still permanent
+// until a reboot. Closing that needs a deferral counter that reboots after N
+// consecutive skips, which is not implemented yet.
+#define WIFI_MIN_FREE_HEAP_BYTES     55000
+#define WIFI_MIN_LARGEST_BLOCK_BYTES 20000
 
 // Heartbeat: even when /log.csv is empty, force a POST at least this often so
 // the server can push log_interval_sec / server_time / future config knobs.
@@ -113,7 +147,15 @@
 #define CONFIG_HEARTBEAT_SEC    3600
 
 // ---------- Storage ----------
-#define SYNC_BATCH_SIZE         100       // rows per POST
+// Rows per POST. Deliberately small: each row costs ~100 B of request body and
+// ~10 ArduinoJson slots, and ArduinoJson 7 grows the document on the heap in
+// 1 KB pools rather than reserving up front. At 100 rows a single POST churned
+// ~9 KB of pool plus an ~11 KB body String through the heap every cycle — and
+// that was self-worsening: once POSTs began failing the backlog grew until
+// every retry hit the 100-row cap, so each attempt demanded MORE contiguous
+// memory than the one that had just failed. 25 keeps the peak near 4 KB, at the
+// cost of more frequent but individually cheaper POSTs.
+#define SYNC_BATCH_SIZE         25        // rows per POST
 #define MAX_BOOT_HISTORY        32        // circular buffer entries
 #define MAX_WIFI_CREDS          1         // only one network at a time
 #define SEQ_HWM_STRIDE          10        // NVS write batching for last_seq

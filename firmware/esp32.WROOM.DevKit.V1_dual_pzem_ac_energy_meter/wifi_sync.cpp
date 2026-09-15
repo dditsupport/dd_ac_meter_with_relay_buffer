@@ -373,8 +373,10 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // mbedTLS's buffers. If free heap — or, just as important, the largest free
   // block — has dropped too low (e.g. after churn on a marginal link), skip
   // this POST instead of risking an OOM-time hard fault or heap corruption. The
-  // rows stay buffered and ship next cycle once memory recovers. The numbers
-  // are logged so the thresholds can be tuned to what this board actually runs.
+  // rows stay buffered. Note this only DEFERS: a C heap never compacts, so a
+  // fragmented one does not heal on its own and every later POST defers too,
+  // until something reboots the device. The numbers are logged so the
+  // thresholds can be tuned to what this board actually runs.
   if (is_https) {
     uint32_t free_heap = esp_get_free_heap_size();
     uint32_t largest   = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
@@ -395,7 +397,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   // past the task watchdog (the cause of the recurring `task_wdt: conn` reboot).
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);  // bound TCP connect too
+  http.setConnectTimeout(TCP_CONNECT_TIMEOUT_MS);  // bound TCP connect too
   http.setTimeout(HTTP_TIMEOUT_MS);         // bound the response read
 
   // Feed the task WDT right before the blocking POST: even a bounded handshake
@@ -628,7 +630,7 @@ bool run_cycle() {
 
   bool result = false;
   if (try_connect_known()) {
-    ntp_sync_if_due();  // hourly resync; OK to proceed even if it fails
+    ntp_sync_if_due();  // NTP_RESYNC_INTERVAL_SEC; OK to proceed even if it fails
 
     uint64_t snapshot = storage::snapshot_max_seq();
     // Loop until all rows up to snapshot have been acked or a POST fails.
