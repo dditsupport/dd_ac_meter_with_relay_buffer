@@ -84,10 +84,11 @@ $locations = $pdo->query(
   .dev .f-interval { flex: 0 0 auto; }
   .dev .f-interval .iwrap { display: flex; gap: 0.3rem; }
   .dev .f-interval input   { width: 5.5rem; }
-  .dev-row.line3 { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--border);
-                   align-items: center; }
+  /* The maintenance controls share .line2 with the interval field. A rule and a
+     little padding separate the two groups without costing a second row. */
   .maint-lbl { font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
-               letter-spacing: 0.04em; cursor: help; align-self: center; }
+               letter-spacing: 0.04em; cursor: help; align-self: center;
+               border-left: 1px solid var(--border); padding-left: 0.9rem; }
   .dev .f-maint { flex: 0 0 auto; }
   .dev .f-maint .iwrap  { display: flex; gap: 0.3rem; align-items: center; }
   .dev .f-maint input   { width: 4.2rem; }
@@ -177,6 +178,32 @@ $locations = $pdo->query(
                        value="<?= (int)($d['log_interval_sec'] ?? 900) ?>">
                 <button class="set-interval">Set</button>
               </span></label>
+            <span class="maint-lbl" title="Pushed to the device on its next ingest sync and cached in NVS. Leave a field BLANK to stop managing it here — the device then follows the fleet default in api/_db.php. The firmware re-validates every value, so an out-of-range entry is refused above rather than silently ignored on the device.">Maintenance:</span>
+            <label class="field f-maint"><span class="lbl">Nightly reboot</span>
+              <select class="nrb-en">
+                <option value=""  <?= !array_key_exists('nightly_reboot_enable', $d) || $d['nightly_reboot_enable'] === null ? 'selected' : '' ?>>default</option>
+                <option value="1" <?= isset($d['nightly_reboot_enable']) && (int)$d['nightly_reboot_enable'] === 1 ? 'selected' : '' ?>>on</option>
+                <option value="0" <?= isset($d['nightly_reboot_enable']) && (int)$d['nightly_reboot_enable'] === 0 ? 'selected' : '' ?>>off</option>
+              </select></label>
+            <label class="field f-maint"><span class="lbl">Window (h)</span>
+              <span class="iwrap">
+                <input class="nrb-sh" type="number" min="0" max="23" step="1" placeholder="4"
+                       value="<?= isset($d['nightly_reboot_start_hour']) && $d['nightly_reboot_start_hour'] !== null ? (int)$d['nightly_reboot_start_hour'] : '' ?>">
+                <span class="dash">–</span>
+                <input class="nrb-eh" type="number" min="1" max="24" step="1" placeholder="5"
+                       value="<?= isset($d['nightly_reboot_end_hour']) && $d['nightly_reboot_end_hour'] !== null ? (int)$d['nightly_reboot_end_hour'] : '' ?>">
+              </span></label>
+            <label class="field f-maint"><span class="lbl">Radio rest (s)</span>
+              <span class="iwrap">
+                <input class="rr-int" type="number" min="0" max="86400" step="1" placeholder="0"
+                       title="Interval between periodic rests. 0 = periodic timer off; the stuck-Wi-Fi watchdog still forces one on demand. Otherwise 600-86400."
+                       value="<?= isset($d['radio_rest_interval_sec']) && $d['radio_rest_interval_sec'] !== null ? (int)$d['radio_rest_interval_sec'] : '' ?>">
+                <span class="dash">/</span>
+                <input class="rr-dur" type="number" min="5" max="60" step="1" placeholder="45"
+                       title="Seconds fully off-air per rest (5-60)."
+                       value="<?= isset($d['radio_rest_duration_sec']) && $d['radio_rest_duration_sec'] !== null ? (int)$d['radio_rest_duration_sec'] : '' ?>">
+                <button class="set-maint">Set</button>
+              </span></label>
             <span class="dev-meta">Sync: <b><?= h((string)($d['last_sync_at'] ?? '—')) ?></b></span>
             <span class="dev-meta">FW: <b><?= h((string)($d['fw_version'] ?? '—')) ?></b></span>
             <span class="dev-meta">Rows: <b><?= number_format((int)($d['total_readings'] ?? 0)) ?></b></span>
@@ -207,34 +234,6 @@ $locations = $pdo->query(
               <a href="/dashboard/?device_id=<?= urlencode($d['device_id']) ?>">view</a>
               <button class="danger delete-device">Delete</button>
             </span>
-          </div>
-          <div class="dev-row line3">
-            <span class="maint-lbl" title="Pushed to the device on its next ingest sync and cached in NVS. Leave a field BLANK to stop managing it here — the device then follows the fleet default in api/_db.php. The firmware re-validates every value, so an out-of-range entry is refused above rather than silently ignored on the device.">Maintenance:</span>
-            <label class="field f-maint"><span class="lbl">Nightly reboot</span>
-              <select class="nrb-en">
-                <option value=""  <?= !array_key_exists('nightly_reboot_enable', $d) || $d['nightly_reboot_enable'] === null ? 'selected' : '' ?>>default</option>
-                <option value="1" <?= isset($d['nightly_reboot_enable']) && (int)$d['nightly_reboot_enable'] === 1 ? 'selected' : '' ?>>on</option>
-                <option value="0" <?= isset($d['nightly_reboot_enable']) && (int)$d['nightly_reboot_enable'] === 0 ? 'selected' : '' ?>>off</option>
-              </select></label>
-            <label class="field f-maint"><span class="lbl">Window (h)</span>
-              <span class="iwrap">
-                <input class="nrb-sh" type="number" min="0" max="23" step="1" placeholder="4"
-                       value="<?= isset($d['nightly_reboot_start_hour']) && $d['nightly_reboot_start_hour'] !== null ? (int)$d['nightly_reboot_start_hour'] : '' ?>">
-                <span class="dash">–</span>
-                <input class="nrb-eh" type="number" min="1" max="24" step="1" placeholder="5"
-                       value="<?= isset($d['nightly_reboot_end_hour']) && $d['nightly_reboot_end_hour'] !== null ? (int)$d['nightly_reboot_end_hour'] : '' ?>">
-              </span></label>
-            <label class="field f-maint"><span class="lbl">Radio rest (s)</span>
-              <span class="iwrap">
-                <input class="rr-int" type="number" min="0" max="86400" step="1" placeholder="0"
-                       title="Interval between periodic rests. 0 = periodic timer off; the stuck-Wi-Fi watchdog still forces one on demand. Otherwise 600-86400."
-                       value="<?= isset($d['radio_rest_interval_sec']) && $d['radio_rest_interval_sec'] !== null ? (int)$d['radio_rest_interval_sec'] : '' ?>">
-                <span class="dash">/</span>
-                <input class="rr-dur" type="number" min="5" max="60" step="1" placeholder="45"
-                       title="Seconds fully off-air per rest (5-60)."
-                       value="<?= isset($d['radio_rest_duration_sec']) && $d['radio_rest_duration_sec'] !== null ? (int)$d['radio_rest_duration_sec'] : '' ?>">
-                <button class="set-maint">Set</button>
-              </span></label>
           </div>
         </div>
       <?php endforeach; ?>
@@ -370,8 +369,10 @@ dialog[open]  { display: block; }
   .relay-actions    { position:sticky; bottom:0; background:var(--surface); padding:0.75rem 0;
                       margin-top:0.75rem; border-top:1px solid var(--border); }
 
-  .dev-row.line1, .dev-row.line2, .dev-row.line3 { gap:0.5rem 0.6rem; }
+  .dev-row.line1, .dev-row.line2 { gap:0.5rem 0.6rem; }
   .dev .f-maint, .dev .f-maint .iwrap { flex-wrap: wrap; }
+  /* On a narrow screen the row wraps anyway, so drop the divider. */
+  .maint-lbl { border-left: 0; padding-left: 0; }
   .dev .f-id       { white-space:normal; overflow-wrap:anywhere; align-self:flex-start; }
   .dev .f-name, .dev .f-location, .dev .f-owner { flex:1 1 100%; }
   .dev .f-cap      { flex:0 0 7rem; }
