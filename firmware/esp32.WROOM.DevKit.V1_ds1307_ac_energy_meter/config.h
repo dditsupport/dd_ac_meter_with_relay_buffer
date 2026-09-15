@@ -22,7 +22,11 @@
 // from the companion app — no reflash needed.
 #define INGEST_HOST_DEFAULT     "https://ac.aromen.biz"
 #define INGEST_PATH             "/api/ingest.php"
-#define DEVICE_TOKEN            "token"
+// Shared secret sent as the X-Device-Token header on every ingest POST. The
+// backend compares it with hash_equals() against the DEVICE_TOKEN constant in
+// secrets.php, so the two MUST match exactly — change one and every device's
+// POSTs start coming back 401 until the other is changed too.
+#define DEVICE_TOKEN            "hs2AfGYZqZSFbb_rp-t3zy_I_rXb5TJISpn6Okih4pg"
 
 // ---------- Wi-Fi (optional bench-test fallback) ----------
 // If non-empty, the firmware writes these to NVS at boot whenever the saved
