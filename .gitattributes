@@ -1,0 +1,10 @@
+# DipTrace design files are binary containers (the PCB layouts start with a
+# "DTBOARD" magic). Marking them `binary` is shorthand for -diff -merge -text:
+# git stops trying to produce a textual diff, stops line-merging them — which
+# would silently corrupt a layout — and never rewrites line endings inside them.
+#
+# The practical consequence: these files cannot be merged. Two people editing
+# the same board in parallel means one of the two versions is lost, so treat a
+# board file as checked out by one person at a time.
+*.dip  binary
+*.dch  binary

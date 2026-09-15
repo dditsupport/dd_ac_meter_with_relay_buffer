@@ -61,6 +61,7 @@ firmware/                                             ESP32 Arduino sketches (on
 backend/                                              MilesWeb PHP + MySQL (planned, not yet built)
 android/                                              Companion app (planned, not yet built)
 docs/                                                 Wiring, provisioning, future hardware notes
+hardware/                                             PCB design files (DipTrace) for the relay stage
 tools/                                                Bench-test helpers (fake_ingest.py)
 ```
 
