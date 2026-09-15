@@ -108,6 +108,102 @@ function gen_ble_pin(): string {
     return str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 }
 
+/* ---------- Server-pushed maintenance config ----------
+ * Attached to every ingest response and cached in NVS by the firmware, so a
+ * fleet's reboot window can be moved without reflashing. A device row in
+ * ed_device_meta overrides these; NULL there means "not managed for this
+ * device" and the fleet default below applies.
+ *
+ * The firmware re-validates everything it receives (storage::set_nightly_reboot
+ * and set_radio_rest reject rather than clamp, keeping the previous value), so
+ * these are the fleet policy, not a trusted control channel.
+ *
+ * Each is overridable from secrets.php.
+ */
+// Nightly reboot: once per local calendar day, at a MAC-derived minute inside
+// the window so a fleet returns staggered instead of stampeding the endpoint.
+// Hours are device LOCAL time; start inclusive, end exclusive.
+if (!defined('DEFAULT_NIGHTLY_REBOOT_ENABLE'))     define('DEFAULT_NIGHTLY_REBOOT_ENABLE', 1);
+if (!defined('DEFAULT_NIGHTLY_REBOOT_START_HOUR')) define('DEFAULT_NIGHTLY_REBOOT_START_HOUR', 4);
+if (!defined('DEFAULT_NIGHTLY_REBOOT_END_HOUR'))   define('DEFAULT_NIGHTLY_REBOOT_END_HOUR', 5);
+// Periodic radio rest. 0 = periodic timer OFF, which is the intended state:
+// the stuck-Wi-Fi watchdog still forces a rest on demand, and that path fires
+// only when a device is demonstrably associated-but-not-posting rather than
+// taking the radio off-air on a schedule. Give this a non-zero interval only if
+// field logs show stale associations the on-demand path is missing.
+if (!defined('DEFAULT_RADIO_REST_INTERVAL_SEC'))   define('DEFAULT_RADIO_REST_INTERVAL_SEC', 0);
+if (!defined('DEFAULT_RADIO_REST_DURATION_SEC'))   define('DEFAULT_RADIO_REST_DURATION_SEC', 45);
+
+/** Bounds accepted for a maintenance value, server-side. Mirrors the firmware's
+ *  own validation so the admin UI rejects a bad value before it is stored,
+ *  rather than storing something every device will silently ignore. */
+function maintenance_value_ok(string $key, int $v): bool {
+    return match ($key) {
+        'nightly_reboot_enable'     => $v === 0 || $v === 1,
+        'nightly_reboot_start_hour' => $v >= 0 && $v <= 23,
+        'nightly_reboot_end_hour'   => $v >= 1 && $v <= 24,
+        // 0 disables the periodic timer; otherwise at least 10 min, so a
+        // mistyped value cannot put a device off-air on a loop.
+        'radio_rest_interval_sec'   => $v === 0 || ($v >= 600 && $v <= 86400),
+        // Kept well under the stuck-Wi-Fi and stuck-BLE watchdogs.
+        'radio_rest_duration_sec'   => $v >= 5 && $v <= 60,
+        default                     => false,
+    };
+}
+
+/**
+ * The maintenance config to push to one device: its ed_device_meta overrides
+ * where set, the fleet defaults everywhere else.
+ *
+ * Returns an empty array if the columns do not exist yet (migration 014 not
+ * applied). An absent key leaves the firmware's cached value alone, so an
+ * un-migrated DB simply pushes nothing rather than resetting devices to the
+ * defaults — which is why this degrades silently instead of throwing.
+ */
+function device_maintenance_config(PDO $pdo, string $device_id): array {
+    $keys = [
+        'nightly_reboot_enable'     => DEFAULT_NIGHTLY_REBOOT_ENABLE,
+        'nightly_reboot_start_hour' => DEFAULT_NIGHTLY_REBOOT_START_HOUR,
+        'nightly_reboot_end_hour'   => DEFAULT_NIGHTLY_REBOOT_END_HOUR,
+        'radio_rest_interval_sec'   => DEFAULT_RADIO_REST_INTERVAL_SEC,
+        'radio_rest_duration_sec'   => DEFAULT_RADIO_REST_DURATION_SEC,
+    ];
+    try {
+        $st = $pdo->prepare(
+            'SELECT ' . implode(', ', array_keys($keys)) .
+            '  FROM ed_device_meta WHERE device_id = ?'
+        );
+        $st->execute([$device_id]);
+        $row = $st->fetch() ?: [];
+    } catch (Throwable $e) {
+        return [];   // pre-migration DB: push nothing
+    }
+    $out = [];
+    foreach ($keys as $k => $fleet_default) {
+        // NULL / missing row => not managed for this device => fleet default.
+        $v = (isset($row[$k]) && $row[$k] !== null) ? (int)$row[$k] : (int)$fleet_default;
+        if (maintenance_value_ok($k, $v)) $out[$k] = $v;
+    }
+    // A window the firmware would reject outright is worse than not sending
+    // one: it would log the rejection every sync. Drop the pair if it is not a
+    // non-empty span inside a single local day.
+    if (isset($out['nightly_reboot_start_hour'], $out['nightly_reboot_end_hour']) &&
+        $out['nightly_reboot_end_hour'] <= $out['nightly_reboot_start_hour']) {
+        unset($out['nightly_reboot_start_hour'], $out['nightly_reboot_end_hour']);
+    }
+    // enable is meaningless to push without a window to go with it.
+    if (!isset($out['nightly_reboot_start_hour'])) unset($out['nightly_reboot_enable']);
+    return $out;
+}
+
+/** JSON-encodable form: enable is a bool on the wire, the rest are ints. */
+function maintenance_config_for_response(array $cfg): array {
+    if (isset($cfg['nightly_reboot_enable'])) {
+        $cfg['nightly_reboot_enable'] = (bool)$cfg['nightly_reboot_enable'];
+    }
+    return $cfg;
+}
+
 /* ---------- PDO singleton ---------- */
 function db(): PDO {
     static $pdo = null;

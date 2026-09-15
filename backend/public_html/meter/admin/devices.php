@@ -19,6 +19,9 @@ $opt_rssi   = ', m.wifi_rssi';
 $opt_coin   = ', m.coincell_mv';
 $opt_pin    = ', d.ble_pin';
 $opt_counts = ', m.channel_count, m.relay_count';
+$opt_maint  = ', m.nightly_reboot_enable, m.nightly_reboot_start_hour,
+                 m.nightly_reboot_end_hour, m.radio_rest_interval_sec,
+                 m.radio_rest_duration_sec';
 // NOTE: relay schedules are keyed (device_id, channel) since migration 011, so
 // ed_device_relay_schedule must NOT be joined here — a 3-relay device would
 // otherwise return three rows and appear three times in this list. The
@@ -36,6 +39,7 @@ $from       = ' FROM ed_energy_devices d
 $RELAY_CONV_FW = '2.0.0';
 $devices = [];
 foreach ([
+    $opt_pin . $opt_relay . $opt_drift . $opt_rssi . $opt_coin . $opt_counts . $opt_maint,
     $opt_pin . $opt_relay . $opt_drift . $opt_rssi . $opt_coin . $opt_counts,
     $opt_pin . $opt_relay . $opt_drift . $opt_rssi . $opt_coin,
     $opt_pin . $opt_relay . $opt_drift . $opt_rssi,
@@ -80,6 +84,15 @@ $locations = $pdo->query(
   .dev .f-interval { flex: 0 0 auto; }
   .dev .f-interval .iwrap { display: flex; gap: 0.3rem; }
   .dev .f-interval input   { width: 5.5rem; }
+  .dev-row.line3 { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--border);
+                   align-items: center; }
+  .maint-lbl { font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
+               letter-spacing: 0.04em; cursor: help; align-self: center; }
+  .dev .f-maint { flex: 0 0 auto; }
+  .dev .f-maint .iwrap  { display: flex; gap: 0.3rem; align-items: center; }
+  .dev .f-maint input   { width: 4.2rem; }
+  .dev .f-maint select  { width: 5.5rem; }
+  .dev .f-maint .dash   { color: var(--muted); }
   .dev-meta { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
   .dev-meta b { color: var(--text); font-weight: 600; }
   .relay-dot { display: inline-block; width: 0.62rem; height: 0.62rem; border-radius: 50%;
@@ -194,6 +207,34 @@ $locations = $pdo->query(
               <a href="/dashboard/?device_id=<?= urlencode($d['device_id']) ?>">view</a>
               <button class="danger delete-device">Delete</button>
             </span>
+          </div>
+          <div class="dev-row line3">
+            <span class="maint-lbl" title="Pushed to the device on its next ingest sync and cached in NVS. Leave a field BLANK to stop managing it here — the device then follows the fleet default in api/_db.php. The firmware re-validates every value, so an out-of-range entry is refused above rather than silently ignored on the device.">Maintenance:</span>
+            <label class="field f-maint"><span class="lbl">Nightly reboot</span>
+              <select class="nrb-en">
+                <option value=""  <?= !array_key_exists('nightly_reboot_enable', $d) || $d['nightly_reboot_enable'] === null ? 'selected' : '' ?>>default</option>
+                <option value="1" <?= isset($d['nightly_reboot_enable']) && (int)$d['nightly_reboot_enable'] === 1 ? 'selected' : '' ?>>on</option>
+                <option value="0" <?= isset($d['nightly_reboot_enable']) && (int)$d['nightly_reboot_enable'] === 0 ? 'selected' : '' ?>>off</option>
+              </select></label>
+            <label class="field f-maint"><span class="lbl">Window (h)</span>
+              <span class="iwrap">
+                <input class="nrb-sh" type="number" min="0" max="23" step="1" placeholder="4"
+                       value="<?= isset($d['nightly_reboot_start_hour']) && $d['nightly_reboot_start_hour'] !== null ? (int)$d['nightly_reboot_start_hour'] : '' ?>">
+                <span class="dash">–</span>
+                <input class="nrb-eh" type="number" min="1" max="24" step="1" placeholder="5"
+                       value="<?= isset($d['nightly_reboot_end_hour']) && $d['nightly_reboot_end_hour'] !== null ? (int)$d['nightly_reboot_end_hour'] : '' ?>">
+              </span></label>
+            <label class="field f-maint"><span class="lbl">Radio rest (s)</span>
+              <span class="iwrap">
+                <input class="rr-int" type="number" min="0" max="86400" step="1" placeholder="0"
+                       title="Interval between periodic rests. 0 = periodic timer off; the stuck-Wi-Fi watchdog still forces one on demand. Otherwise 600-86400."
+                       value="<?= isset($d['radio_rest_interval_sec']) && $d['radio_rest_interval_sec'] !== null ? (int)$d['radio_rest_interval_sec'] : '' ?>">
+                <span class="dash">/</span>
+                <input class="rr-dur" type="number" min="5" max="60" step="1" placeholder="45"
+                       title="Seconds fully off-air per rest (5-60)."
+                       value="<?= isset($d['radio_rest_duration_sec']) && $d['radio_rest_duration_sec'] !== null ? (int)$d['radio_rest_duration_sec'] : '' ?>">
+                <button class="set-maint">Set</button>
+              </span></label>
           </div>
         </div>
       <?php endforeach; ?>
@@ -329,7 +370,8 @@ dialog[open]  { display: block; }
   .relay-actions    { position:sticky; bottom:0; background:var(--surface); padding:0.75rem 0;
                       margin-top:0.75rem; border-top:1px solid var(--border); }
 
-  .dev-row.line1, .dev-row.line2 { gap:0.5rem 0.6rem; }
+  .dev-row.line1, .dev-row.line2, .dev-row.line3 { gap:0.5rem 0.6rem; }
+  .dev .f-maint, .dev .f-maint .iwrap { flex-wrap: wrap; }
   .dev .f-id       { white-space:normal; overflow-wrap:anywhere; align-self:flex-start; }
   .dev .f-name, .dev .f-location, .dev .f-owner { flex:1 1 100%; }
   .dev .f-cap      { flex:0 0 7rem; }
@@ -375,6 +417,22 @@ document.querySelectorAll('button.set-interval').forEach(btn => btn.addEventList
   const r  = await post('set_interval', {
     device_id: tr.dataset.id,
     log_interval_sec: tr.querySelector('.interval').value,
+  });
+  alert(r.ok ? 'Saved. Takes effect on the device\'s next sync.' : 'Error: ' + r.error);
+}));
+
+// Maintenance config. Every field is sent, including empty ones: an empty
+// string CLEARS that override server-side, so "blank = follow the fleet
+// default" round-trips instead of being stuck at whatever was saved first.
+document.querySelectorAll('button.set-maint').forEach(btn => btn.addEventListener('click', async () => {
+  const tr = btn.closest('.dev');
+  const r  = await post('set_maintenance', {
+    device_id:                 tr.dataset.id,
+    nightly_reboot_enable:     tr.querySelector('.nrb-en').value,
+    nightly_reboot_start_hour: tr.querySelector('.nrb-sh').value,
+    nightly_reboot_end_hour:   tr.querySelector('.nrb-eh').value,
+    radio_rest_interval_sec:   tr.querySelector('.rr-int').value,
+    radio_rest_duration_sec:   tr.querySelector('.rr-dur').value,
   });
   alert(r.ok ? 'Saved. Takes effect on the device\'s next sync.' : 'Error: ' + r.error);
 }));

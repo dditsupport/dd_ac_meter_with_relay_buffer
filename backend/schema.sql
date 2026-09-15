@@ -80,6 +80,20 @@ CREATE TABLE IF NOT EXISTS ed_device_meta (
   wifi_rssi         SMALLINT    NULL,
   -- Latest CR2032 RTC-backup coin-cell voltage reported on ingest (millivolts).
   coincell_mv       SMALLINT UNSIGNED NULL,
+  -- ---- Server-pushed maintenance config (firmware >= Group C) --------------
+  -- NULL means "not managed for this device": ingest.php then pushes the
+  -- fleet-wide DEFAULT_* value from api/_db.php. Set a value here to override
+  -- one device. The firmware caches whatever it receives in NVS, so a push
+  -- survives a Wi-Fi outage, and validates it before applying — an
+  -- out-of-range value is ignored device-side rather than clamped.
+  -- Nightly reboot window, device local time: start inclusive, end exclusive.
+  nightly_reboot_enable     TINYINT(1)       NULL,
+  nightly_reboot_start_hour TINYINT UNSIGNED NULL,
+  nightly_reboot_end_hour   TINYINT UNSIGNED NULL,
+  -- Periodic radio rest. interval 0 = periodic timer off (the on-demand
+  -- reassociation the stuck-Wi-Fi watchdog performs is unaffected).
+  radio_rest_interval_sec   INT UNSIGNED     NULL,
+  radio_rest_duration_sec   SMALLINT UNSIGNED NULL,
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

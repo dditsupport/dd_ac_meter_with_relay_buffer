@@ -341,6 +341,16 @@ if ($effective_interval > 0) {
     $resp['log_interval_sec'] = $effective_interval;
 }
 
+// Server-pushed maintenance config: nightly reboot window and periodic radio
+// rest. Per-device overrides from ed_device_meta where set, fleet defaults
+// (api/_db.php) otherwise. The firmware caches these in NVS and re-validates
+// them, and treats an ABSENT key as "leave the cached value alone" — so on a DB
+// without migration 014 this adds nothing and devices keep running on their
+// compile-time defaults rather than being reset.
+foreach (maintenance_config_for_response(device_maintenance_config($pdo, $device_id)) as $k => $v) {
+    $resp[$k] = $v;
+}
+
 // Attach the relay config (if any). schedule_json = AC-allowed open hours;
 // compressor_watts / grace_min tune the compressor-aware cutoff. Firmware uses
 // 'relay_version' to skip reapplying when nothing has changed. The compressor
