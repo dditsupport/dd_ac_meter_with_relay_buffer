@@ -1,0 +1,3 @@
+# DipTrace PCB sources are binary: never diff, merge or EOL-convert them.
+*.dip binary
+*.dch binary

@@ -61,6 +61,7 @@ firmware/                                             ESP32 Arduino sketches (on
 backend/                                              MilesWeb PHP + MySQL (planned, not yet built)
 android/                                              Companion app (planned, not yet built)
 docs/                                                 Wiring, provisioning, future hardware notes
+hardware/                                             PCB source for the AC-cutoff relay board (DipTrace)
 tools/                                                Bench-test helpers (fake_ingest.py)
 ```
 
