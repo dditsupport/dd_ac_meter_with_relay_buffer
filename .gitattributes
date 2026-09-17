@@ -8,3 +8,6 @@
 # board file as checked out by one person at a time.
 *.dip  binary
 *.dch  binary
+# Git's own heuristics already detect a PDF as binary; saying so here just
+# makes it explicit alongside the design files it documents.
+*.pdf  binary
