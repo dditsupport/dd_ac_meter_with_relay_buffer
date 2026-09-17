@@ -5,6 +5,43 @@ PCB source for the AC-cutoff relay board.
 | File | Format | Size |
 |---|---|---|
 | `6040_Dipak_Savkare_Relay.dip` | DipTrace PCB layout (`DTBOARD`) | 259 KB |
+| `6040_Dipak_Savkare_Relay_MOSFET.dip` | DipTrace PCB layout (`DTBOARD`) | 264 KB |
+| `pcb_drawing_dimensioned.pdf` | Dimensioned mechanical outline | 95 KB |
+
+> **Two `.dip` files, and it is not recorded which supersedes which.** Both
+> carry job `6040`. `…_Relay.dip` landed in 3f419da; `…_Relay_MOSFET.dip` was
+> supplied later and is larger, so it is *probably* the same board after a
+> MOSFET stage was added — but nothing here establishes that, and DipTrace is
+> the only thing that can. Confirm before fabricating from either, and delete
+> the dead one once you know.
+
+## The dimensioned drawing
+
+`pcb_drawing_dimensioned.pdf` is **CCTV-8CH ENCLOSURE PCB OUTLINE — REV D**: one
+A4 vector sheet, viewed from the enclosure front (component side), **mm**, origin
+at the **board top-left**. GitHub previews PDFs in the browser, so unlike the
+`.dip` files this is readable by anyone — which is the reason to keep it here.
+
+| | |
+|---|---|
+| Board | 100 × 120 × 1.0 mm, no cutouts |
+| Mounting | 7× Ø5.2 NPTH (H1–H7), keep-out **Ø11 both sides**; board sits on all 7 cover bosses |
+| Clamping | H1/H3/H6/H7 plate nib + screw clamp · H2/H4/H5 screw + washer, no nib |
+| Hole grid | x = 6, 50, 94 · y = 6, 53, 106 |
+| Height budget | component side **≤25.5** · back side **≤2.8** (to plate) |
+| Terminal block | notch opening 82 × 14 along the bottom edge, x 9–91 |
+| LED window | block 10.00 × 30.55 at REF A (17, 38.73); window 5.66 × 13.66 centred, centre (22, 54); block top 23.3 below the PCB face |
+| Placement | board → enclosure offset X+3, Y+3 · enclosure inside coords for the window X 76–86, Y 41.73–72.28 |
+
+The sheet carries one unresolved item, bold on the drawing itself:
+
+> **VERIFY: boss top → plate ring gap ≈1.1**
+
+That is a fit check against a physical enclosure, not something a layout
+settles. It is open as committed.
+
+Note the drawing is a **100 × 120** outline. If either `.dip` is a different
+size, the drawing does not describe it — see the caveat above the file table.
 
 ## Opening it
 

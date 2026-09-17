@@ -1,3 +1,6 @@
 # DipTrace PCB sources are binary: never diff, merge or EOL-convert them.
 *.dip binary
 *.dch binary
+# The dimensioned outline drawing. Git already classifies a PDF as binary; this
+# just says so alongside the design files it documents.
+*.pdf binary
