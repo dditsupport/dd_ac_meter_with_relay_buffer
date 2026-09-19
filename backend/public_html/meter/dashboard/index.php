@@ -87,6 +87,18 @@ if ($selected !== '') {
   .meter-reading { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
   .meter-reading b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .meter-reading:empty { display: none; }
+  /* Meter readings per bar: the arithmetic behind each energy bar. */
+  table.grid.readings th:not(:first-child),
+  table.grid.readings td:not(:first-child) { text-align: right; }
+  table.grid.readings td.gen { font-weight: 600; color: var(--primary); }
+  table.grid.readings tfoot th {
+    background: transparent; border-bottom: none; text-transform: none;
+    letter-spacing: 0; font-size: 0.9rem; color: var(--text);
+  }
+  table.grid.readings tfoot th:last-child {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 600; color: var(--primary); text-align: right;
+  }
   @media (max-width: 640px) {
     /* .controls stacks its children on mobile; these two are status text, not
        fields, so keep them on one wrapping line instead of one row each. */
@@ -190,6 +202,21 @@ if ($selected !== '') {
          under the bars vanish once the bars get narrow (30 days, or any phone),
          so this line is what always carries the figure. -->
     <p class="meter-reading" id="meter-reading"></p>
+  </section>
+
+  <section class="card" id="readings-card">
+    <h2>Meter readings per bar</h2>
+    <p class="muted">The cumulative meter reading at the start and end of each
+       bar above &mdash; continued from the old meter's baseline, so it reads
+       like the physical meter. Generated = end &minus; start.</p>
+    <table class="grid readings">
+      <thead><tr id="readings-head"></tr></thead>
+      <tbody id="readings-body"></tbody>
+      <tfoot>
+        <tr id="readings-foot"><th>Total</th><th></th><th></th><th id="readings-total">&mdash;</th></tr>
+      </tfoot>
+    </table>
+    <p class="muted" id="readings-empty" style="display:none">No readings in this range.</p>
   </section>
 
   <section class="card">
@@ -352,6 +379,90 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showL
   });
 }
 
+/* ---------- Meter readings per bar ---------- */
+
+const RD_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// Label a bucket from the ISO string's own fields rather than via new Date().
+// The server already emits the bucket in APP_TIMEZONE, so re-parsing it into
+// the viewer's zone would shift a midnight bucket back a day for anyone outside
+// IST and label every row with the wrong date.
+function bucketLabel(iso, unit){
+  if (typeof iso !== 'string' || iso.length < 10) return String(iso);
+  const y = iso.slice(0, 4), m = +iso.slice(5, 7), d = +iso.slice(8, 10);
+  if (unit === 'month') return `${RD_MON[m - 1]} ${y}`;
+  if (unit === 'hour') {
+    const h = +iso.slice(11, 13);
+    return `${RD_MON[m - 1]} ${d}, ${(h % 12) || 12} ${h < 12 ? 'AM' : 'PM'}`;
+  }
+  return `${RD_MON[m - 1]} ${d}`;
+}
+
+// Drop leading/trailing buckets where the meter never moved — on Today those
+// are the night hours, which draw no bar and would pad the table with zeros.
+// Anything in between is kept, so the rows still sum to the range's total.
+function trimIdleEdges(points){
+  let a = 0, b = points.length - 1;
+  while (a <= b && !(points[a].y > 0)) a++;
+  while (b >= a && !(points[b].y > 0)) b--;
+  return a > b ? points : points.slice(a, b + 1);
+}
+
+// One row per bar: the two meter readings it spans and their difference.
+// s/e already carry the old-meter offset the charts use, and e - s is exactly
+// the bar's kWh, so this table is the arithmetic behind the chart rather than
+// a second estimate. With several meters a leading Meter column is added —
+// each channel is its own cumulative counter and they cannot share a row.
+function renderReadings(per, R){
+  const headEl  = document.getElementById('readings-head');
+  const bodyEl  = document.getElementById('readings-body');
+  const footEl  = document.getElementById('readings-foot');
+  const totalEl = document.getElementById('readings-total');
+  const emptyEl = document.getElementById('readings-empty');
+  const table   = document.querySelector('table.readings');
+  const unitHead = R.xUnit === 'month' ? 'Month' : (R.xUnit === 'hour' ? 'Hour' : 'Day');
+
+  headEl.innerHTML = (MULTI ? '<th>Meter</th>' : '') +
+    `<th>${unitHead}</th><th>Start reading (kWh)</th>` +
+    '<th>End reading (kWh)</th><th>Generated (kWh)</th>';
+  // Keep the footer's blank cells aligned with the header's column count.
+  footEl.innerHTML = '<th>Total</th>' + '<th></th>'.repeat(MULTI ? 3 : 2) +
+    '<th id="readings-total">\u2014</th>';
+
+  const rows = [];
+  per.filter(r => r.ok).forEach(r => {
+    trimIdleEdges(r.energy).forEach(pt => {
+      if (pt.s == null || pt.e == null) return;
+      rows.push({ ch: r.ch, t: pt.t, y: pt.y || 0, s: pt.s, e: pt.e });
+    });
+  });
+  // Newest first — over 30 days the bar you care about is the one on top.
+  rows.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : a.ch - b.ch));
+
+  bodyEl.innerHTML = '';
+  if (!rows.length) {
+    table.style.display = 'none';
+    emptyEl.style.display = '';
+    return;
+  }
+  table.style.display = '';
+  emptyEl.style.display = 'none';
+
+  let sum = 0;
+  rows.forEach(r => {
+    sum += r.y;
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      (MULTI ? `<td>Meter ${r.ch}</td>` : '') +
+      `<td>${bucketLabel(r.t, R.xUnit)}</td>` +
+      `<td class="mono">${r.s.toFixed(3)}</td>` +
+      `<td class="mono">${r.e.toFixed(3)}</td>` +
+      `<td class="mono gen">${r.y.toFixed(3)}</td>`;
+    bodyEl.appendChild(tr);
+  });
+  document.getElementById('readings-total').textContent = sum.toFixed(3);
+}
+
 async function loadRange(rangeKey){
   const R = RANGES[rangeKey];
   document.getElementById('chart-title').textContent = R.label;
@@ -460,6 +571,8 @@ async function loadRange(rangeKey){
   }).filter(Boolean);
   document.getElementById('meter-reading').innerHTML =
     readings.length ? 'Meter reading: ' + readings.join('<br>') : '';
+  renderReadings(per, R);
+
   const peakP = per.reduce((m, r) =>
     Math.max(m, r.power.reduce((n, p) => Math.max(n, p.y || 0), 0)), 0);
   document.getElementById('stat-total').textContent = periodTotal.toFixed(2);
