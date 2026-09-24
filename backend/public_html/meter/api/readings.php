@@ -126,6 +126,21 @@ $origin_kwh = ($origin_wh === false || $origin_wh === null)
     ? null
     : round((float)$origin_wh / 1000.0, 3);
 
+// The channel's most recent cumulative reading, in kWh, regardless of the
+// requested window — the dashboard's "Meter reading" card shows where the
+// counter stands now even when the device hasn't posted in a while.
+// Same index seek as the origin query, from the other end.
+$lt = $pdo->prepare(
+    'SELECT energy_wh FROM ed_energy_readings
+      WHERE device_id = ? AND channel = ?
+      ORDER BY wall_time DESC, id DESC LIMIT 1'
+);
+$lt->execute([$device_id, $channel]);
+$latest_wh  = $lt->fetchColumn();
+$latest_kwh = ($latest_wh === false || $latest_wh === null)
+    ? null
+    : round((float)$latest_wh / 1000.0, 3);
+
 json_response(200, [
     'ok'            => true,
     'device_id'     => $device_id,
@@ -139,6 +154,7 @@ json_response(200, [
     'channel'       => $channel,
     'total_kwh'     => $total_kwh,
     'origin_kwh'    => $origin_kwh,
+    'latest_kwh'    => $latest_kwh,
     'points'        => $points,
 ]);
 

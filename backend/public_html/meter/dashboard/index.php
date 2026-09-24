@@ -189,10 +189,11 @@ if ($selected !== '') {
     <div class="stat"><span>Today</span>       <div class="stat-val"><b id="stat-today">—</b><i>kWh</i></div></div>
     <div class="stat"><span>Peak</span>        <div class="stat-val"><b id="stat-peak">—</b><i>W</i></div></div>
     <div class="stat"><span>Period total</span><div class="stat-val"><b id="stat-total">—</b><i>kWh</i></div></div>
+    <div class="stat"><span>Meter reading</span><div class="stat-val"><b id="stat-meter">—</b><i>kWh</i></div></div>
   </section>
 
   <!-- Per-meter breakdown. Populated only in "All meters" mode, where the four
-       cards above show the COMBINED figures across every meter. -->
+       top cards show the COMBINED figures across every meter. -->
   <section class="cards stats" id="per-meter" hidden></section>
 
   <section class="card">
@@ -265,14 +266,14 @@ const RANGES = {
     xMax: () => hourOfToday(new Date().getHours() + 1),
     xUnit: 'hour',
   },
-  // Same data as `today`; the difference is the frame. This one always shows
-  // the full midnight-to-midnight day, so the hours still to come are visible
-  // as empty space and every day is drawn to the same scale.
-  '24h': { aggregate: 'hourly', powerAggregate: '5min', from: () => startOfToday(),
-           label: '24 hours (12 AM – 12 AM)', energyLabel: 'kWh / hour',
-           // Frame the whole calendar day midnight-to-midnight, not a rolling
-           // "last 24 h from now", so the bars line up on hour boundaries.
-           xMin: () => hourOfToday(0), xMax: () => hourOfToday(24), xUnit: 'hour' },
+  // Rolling window: the last 24 whole hours up to and including the hour in
+  // progress, so it reaches back across midnight into yesterday. `today` is
+  // the calendar day; this is what it has been doing for the past day.
+  // Starts on an hour boundary so the first bar is a full hour, not a sliver.
+  '24h': { aggregate: 'hourly', powerAggregate: '5min', from: () => hourOfToday(new Date().getHours() - 23),
+           label: 'Last 24 hours', energyLabel: 'kWh / hour',
+           xMin: () => hourOfToday(new Date().getHours() - 23),
+           xMax: () => hourOfToday(new Date().getHours() + 1), xUnit: 'hour' },
   '7d':  { aggregate: 'daily',  from: () => daysAgo(7),   label: 'Last 7 days',              energyLabel: 'kWh / day',  xUnit: 'day'   },
   '30d': { aggregate: 'daily',  from: () => daysAgo(30),  label: 'Last 30 days',             energyLabel: 'kWh / day',  xUnit: 'day'   },
   '12m': { aggregate: 'monthly',from: () => monthsAgo(12),label: 'Last 12 months',           energyLabel: 'kWh / month',xUnit: 'month' },
@@ -476,7 +477,7 @@ async function loadRange(rangeKey){
   // them into one series without making the kWh figures meaningless.
   const per = await Promise.all(CHANNELS.map(async ch => {
     const j = await (await fetch(readingsUrl(R.aggregate, ch), { credentials: 'same-origin' })).json();
-    if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0 };
+    if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0, latest: null };
 
     // Readings that continue from the meter this device replaced.
     //
@@ -513,7 +514,9 @@ async function loadRange(rangeKey){
     const total = typeof j.total_kwh === 'number'
       ? j.total_kwh
       : energy.reduce((a, p) => a + (p.y || 0), 0);
-    return { ch, ok: true, energy, power, total, baseline: base };
+    // Where this meter's counter stands now, continuing from the old meter.
+    const latest = typeof j.latest_kwh === 'number' ? j.latest_kwh + offset : null;
+    return { ch, ok: true, energy, power, total, baseline: base, latest };
   }));
 
   if (!per.some(r => r.ok)) { alert('Error loading readings'); return; }
@@ -540,19 +543,27 @@ async function loadRange(rangeKey){
     tension: 0.25,
   })), 'W', xOpts, false, MULTI);
 
-  // Stats. Period total is each range's single start->end meter difference
-  // (server total_kwh, one MAX-MIN over the whole window) rather than a sum of
-  // the bars, which would drop the energy accrued in the gaps between buckets.
-  // capacity_kw is repurposed as the old meter's last reading (kWh) at install,
-  // so it is added on to continue from the meter this device replaced.
+  // Stats. Period total is the energy used in the window: each range's single
+  // start->end meter difference (server total_kwh, one MAX-MIN over the whole
+  // window) rather than a sum of the bars, which would drop the energy accrued
+  // in the gaps between buckets. It is a difference, so the old-meter baseline
+  // does NOT belong in it — that goes on the Meter reading card instead.
   //
   // Across meters these are SUMMED for the combined cards: total energy is
   // additive, and peak is the highest instantaneous draw seen on any meter.
-  // The install baseline (capacity_kw, repurposed as the replaced meter's last
-  // reading) belongs to the DEVICE, so it is added ONCE — summing it per channel
-  // would multiply it by the meter count.
-  const baseline = per.reduce((b, r) => b || r.baseline, 0);
-  const periodTotal = per.reduce((a, r) => a + r.total, 0) + baseline;
+  const periodTotal = per.reduce((a, r) => a + r.total, 0);
+
+  // Meter reading card: the latest cumulative reading, continued from the
+  // replaced meter (capacity_kw). Each channel's `latest` already carries
+  // (capacity_kw - origin); with several meters the baseline belongs to the
+  // DEVICE, so it is counted once — the extra copies are taken back out.
+  const withLatest = per.filter(r => r.ok && r.latest != null);
+  const baseline   = per.reduce((b, r) => b || r.baseline, 0);
+  const meterNow   = withLatest.length
+    ? withLatest.reduce((a, r) => a + r.latest, 0) - baseline * (withLatest.length - 1)
+    : null;
+  document.getElementById('stat-meter').textContent =
+    meterNow === null ? '—' : meterNow.toFixed(2);
 
   // Meter reading across the charted window: where the counter stood at the
   // first bucket and where it stands at the last, both already continuing from
@@ -635,12 +646,9 @@ async function loadLive(){
   }
 
   // Today kWh as the sum of today's per-hour deltas (each hourly bucket's own
-  // max-min), so it matches the hourly bars on the chart. The Period total card
-  // carries the whole-day start->end figure instead. Add the old-meter baseline
-  // (capacity_kw, repurposed as the replaced meter's last reading in kWh) so the
-  // figure continues from that meter.
+  // max-min), so it matches the hourly bars on the chart. It is energy used
+  // today, so no old-meter baseline — the Meter reading card carries that.
   let today_kwh = null;
-  let baseline = 0;
   try {
     const today = isoLocal(startOfToday());
     const rows = await Promise.all(CHANNELS.map(async ch => {
@@ -648,16 +656,12 @@ async function loadLive(){
                    `&aggregate=hourly&from=${encodeURIComponent(today)}`;
       return (await fetch(url2, { credentials: 'same-origin' })).json();
     }));
-    // The install baseline is a property of the DEVICE, not of each meter, so
-    // it is taken once rather than added per channel (which would multiply it).
-    const withCap = rows.find(r => r && Number(r.capacity_kw));
-    baseline = withCap ? Number(withCap.capacity_kw) : 0;
     rows.filter(r => r && r.ok).forEach(r => {
       today_kwh = (today_kwh || 0) + r.points.reduce((a, p) => a + (p.kwh || 0), 0);
     });
   } catch (e) { /* fall through */ }
   document.getElementById('stat-today').textContent =
-    today_kwh === null ? '—' : (today_kwh + baseline).toFixed(2);
+    today_kwh === null ? '—' : today_kwh.toFixed(2);
 }
 
 let currentRangeKey = 'today';
