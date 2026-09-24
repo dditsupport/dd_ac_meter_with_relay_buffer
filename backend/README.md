@@ -198,9 +198,11 @@ at exactly `1348.10` rather than `1348.52`.
 than the value the counter held at install. It is `null` for a device with no
 readings, in which case the dashboard falls back to `old_kwh` alone.
 
-Note this anchors the *chart*; the Today and Period total cards still add the
-raw `capacity_kw` to a window's consumption, so they agree with the chart's end
-reading only when the window covers the device's whole history.
+The dashboard's **Today** and **Period total** cards are pure consumption (a
+window's start->end difference) and carry no baseline. The **Meter reading**
+card shows where the meter stands now: `readings.php` also returns
+`latest_kwh`, the channel's most recent reading, and the card shows
+`old_kwh + (latest_kwh − origin_kwh)`.
 
 ## Time zone (IST)
 
