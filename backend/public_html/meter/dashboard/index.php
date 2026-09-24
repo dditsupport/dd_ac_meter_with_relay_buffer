@@ -84,6 +84,12 @@ if ($selected !== '') {
   .relay-dot.stale   { background: #d8a200; }
   .relay-dot.unknown { background: #c8ccc4; }
   .relay-state .relay-label { color: var(--text); }
+  .custom-range { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+                  font-size: 0.85rem; color: var(--muted); }
+  .custom-range[hidden] { display: none; }
+  .custom-range input[type=date] { padding: 0.35rem 0.5rem; border: 1px solid var(--border);
+                                   border-radius: 6px; font-size: 0.9rem; }
+  .custom-range .range-err { color: var(--danger); }
   .meter-reading { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
   .meter-reading b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .meter-reading:empty { display: none; }
@@ -163,7 +169,16 @@ if ($selected !== '') {
       <button type="button" data-range="7d">7 days</button>
       <button type="button" data-range="30d">30 days</button>
       <button type="button" data-range="12m">12 months</button>
+      <button type="button" data-range="custom">Custom</button>
     </div>
+    <!-- Custom date range. Both ends are whole days, inclusive. -->
+    <span class="custom-range" hidden>
+      <input type="date" id="custom-from" aria-label="From date">
+      to
+      <input type="date" id="custom-to" aria-label="To date">
+      <button type="button" id="custom-apply">Apply</button>
+      <span class="range-err" id="custom-err"></span>
+    </span>
     <?php if ($selected_meta): ?>
       <span class="last-sync">
         Last sync:
@@ -186,7 +201,6 @@ if ($selected !== '') {
 
   <section class="cards stats">
     <div class="stat"><span>Current</span>     <div class="stat-val"><b id="stat-now">—</b><i>W</i></div></div>
-    <div class="stat"><span>Today</span>       <div class="stat-val"><b id="stat-today">—</b><i>kWh</i></div></div>
     <div class="stat"><span>Peak</span>        <div class="stat-val"><b id="stat-peak">—</b><i>W</i></div></div>
     <div class="stat"><span>Period total</span><div class="stat-val"><b id="stat-total">—</b><i>kWh</i></div></div>
     <div class="stat"><span>Meter reading</span><div class="stat-val"><b id="stat-meter">—</b><i>kWh</i></div></div>
@@ -278,6 +292,26 @@ const RANGES = {
   '30d': { aggregate: 'daily',  from: () => daysAgo(30),  label: 'Last 30 days',             energyLabel: 'kWh / day',  xUnit: 'day'   },
   '12m': { aggregate: 'monthly',from: () => monthsAgo(12),label: 'Last 12 months',           energyLabel: 'kWh / month',xUnit: 'month' },
 };
+
+// Build RANGES.custom from two YYYY-MM-DD strings (both days inclusive). The
+// bucket size follows the span so the bar count stays readable: hourly for up
+// to 2 days, daily up to ~3 months, monthly beyond that.
+function buildCustomRange(fromStr, toStr){
+  const [fy, fm, fd] = fromStr.split('-').map(Number);
+  const [ty, tm, td] = toStr.split('-').map(Number);
+  const from = new Date(fy, fm - 1, fd, 0, 0, 0);
+  const to   = new Date(ty, tm - 1, td, 23, 59, 59);
+  const endX = new Date(ty, tm - 1, td + 1, 0, 0, 0);
+  const days = Math.round((endX - from) / 86400e3);
+  const fmt  = d => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  const label = fromStr === toStr ? fmt(from) : `${fmt(from)} – ${fmt(to)}`;
+  const base = { from: () => from, to: () => to, label };
+  if (days <= 2)  return { ...base, aggregate: 'hourly', powerAggregate: '5min',
+                           energyLabel: 'kWh / hour', xUnit: 'hour',
+                           xMin: () => from, xMax: () => endX };
+  if (days <= 92) return { ...base, aggregate: 'daily',   energyLabel: 'kWh / day',   xUnit: 'day' };
+  return            { ...base, aggregate: 'monthly', energyLabel: 'kWh / month', xUnit: 'month' };
+}
 
 function startOfToday(){ const d=new Date(); d.setHours(0,0,0,0); return d; }
 function hourOfToday(h){ const d=new Date(); d.setHours(h,0,0,0); return d; }
@@ -468,9 +502,12 @@ async function loadRange(rangeKey){
   const R = RANGES[rangeKey];
   document.getElementById('chart-title').textContent = R.label;
   const from = isoLocal(R.from());
+  // Preset ranges run up to now (the server's default `to`); a custom range
+  // passes its own end.
+  const toParam = R.to ? `&to=${encodeURIComponent(isoLocal(R.to()))}` : '';
   const readingsUrl = (agg, ch) =>
     `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
-    `&aggregate=${agg}&from=${encodeURIComponent(from)}`;
+    `&aggregate=${agg}&from=${encodeURIComponent(from)}${toParam}`;
 
   // One request per meter. Each channel is a separate cumulative counter, so
   // they must be queried (and totalled) separately — the server cannot mix
@@ -608,7 +645,7 @@ async function loadRange(rangeKey){
     });
   }
 
-  // "Today" + "Current" come from a raw query of the last hour
+  // "Current" comes from a raw query of the last hour
   loadLive();
 }
 
@@ -645,35 +682,40 @@ async function loadLive(){
     });
   }
 
-  // Today kWh as the day's single start->end meter difference (server
-  // total_kwh), the same figure Period total shows on the Today range and the
-  // "Meter reading: a -> b" line under the chart. Summing the hourly bars
-  // instead would drop the energy accrued between one hour's last reading and
-  // the next hour's first. Energy used today, so no old-meter baseline.
-  let today_kwh = null;
-  try {
-    const today = isoLocal(startOfToday());
-    const rows = await Promise.all(CHANNELS.map(async ch => {
-      const url2 = `/api/readings.php?device_id=${encodeURIComponent(DEVICE_ID)}&channel=${ch}` +
-                   `&aggregate=hourly&from=${encodeURIComponent(today)}`;
-      return (await fetch(url2, { credentials: 'same-origin' })).json();
-    }));
-    rows.filter(r => r && r.ok).forEach(r => {
-      if (typeof r.total_kwh === 'number') today_kwh = (today_kwh || 0) + r.total_kwh;
-    });
-  } catch (e) { /* fall through */ }
-  document.getElementById('stat-today').textContent =
-    today_kwh === null ? '—' : today_kwh.toFixed(2);
 }
 
 let currentRangeKey = 'today';
+const customEl = document.querySelector('.custom-range');
+const customFrom = document.getElementById('custom-from');
+const customTo   = document.getElementById('custom-to');
+const customErr  = document.getElementById('custom-err');
+const ymd = d => isoLocal(d).slice(0, 10);
+
 document.querySelectorAll('.range-buttons button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.range-buttons button').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
+    // "Custom" only reveals the date pickers; the chart reloads on Apply.
+    customEl.hidden = b.dataset.range !== 'custom';
+    if (b.dataset.range === 'custom') {
+      if (!customTo.value)   customTo.value   = ymd(new Date());
+      if (!customFrom.value) customFrom.value = ymd(daysAgo(6));
+      customTo.max = customFrom.max = ymd(new Date());
+      return;
+    }
     currentRangeKey = b.dataset.range;
     loadRange(currentRangeKey);
   });
+});
+
+document.getElementById('custom-apply').addEventListener('click', () => {
+  const f = customFrom.value, t = customTo.value;
+  customErr.textContent = '';
+  if (!f || !t) { customErr.textContent = 'Pick both dates.'; return; }
+  if (f > t)    { customErr.textContent = 'From must be on or before To.'; return; }
+  RANGES.custom = buildCustomRange(f, t);
+  currentRangeKey = 'custom';
+  loadRange(currentRangeKey);
 });
 // initial load: today
 document.querySelector('.range-buttons button[data-range="today"]').click();
