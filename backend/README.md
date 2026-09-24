@@ -165,7 +165,7 @@ All require a session cookie (`meter_sess`) from POST `/api/login.php`.
 | URL | Auth | Purpose |
 |---|---|---|
 | `/dashboard/login.php` | none | sign-in form |
-| `/dashboard/` | session | charts: Today / 24 h / 7 d / 30 d / 12 mo + live relay state |
+| `/dashboard/` | session | charts: Today / 24 h / 7 d / 30 d / 12 mo / custom dates + live relay state |
 | `/dashboard/report.php` | session | day-vs-day comparison: hourly kWh line per day, Weekly (last 7 days incl. today) or Monthly (pick a month) |
 | `/admin/` | admin | overview + recent ingest activity |
 | `/admin/users.php` | admin | user CRUD |
@@ -198,8 +198,8 @@ at exactly `1348.10` rather than `1348.52`.
 than the value the counter held at install. It is `null` for a device with no
 readings, in which case the dashboard falls back to `old_kwh` alone.
 
-The dashboard's **Today** and **Period total** cards are pure consumption (a
-window's start->end difference) and carry no baseline. The **Meter reading**
+The dashboard's **Period total** card is pure consumption (the window's
+start->end difference) and carries no baseline. The **Meter reading**
 card shows where the meter stands now: `readings.php` also returns
 `latest_kwh`, the channel's most recent reading, and the card shows
 `old_kwh + (latest_kwh − origin_kwh)`.
