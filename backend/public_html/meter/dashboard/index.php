@@ -645,9 +645,11 @@ async function loadLive(){
     });
   }
 
-  // Today kWh as the sum of today's per-hour deltas (each hourly bucket's own
-  // max-min), so it matches the hourly bars on the chart. It is energy used
-  // today, so no old-meter baseline — the Meter reading card carries that.
+  // Today kWh as the day's single start->end meter difference (server
+  // total_kwh), the same figure Period total shows on the Today range and the
+  // "Meter reading: a -> b" line under the chart. Summing the hourly bars
+  // instead would drop the energy accrued between one hour's last reading and
+  // the next hour's first. Energy used today, so no old-meter baseline.
   let today_kwh = null;
   try {
     const today = isoLocal(startOfToday());
@@ -657,7 +659,7 @@ async function loadLive(){
       return (await fetch(url2, { credentials: 'same-origin' })).json();
     }));
     rows.filter(r => r && r.ok).forEach(r => {
-      today_kwh = (today_kwh || 0) + r.points.reduce((a, p) => a + (p.kwh || 0), 0);
+      if (typeof r.total_kwh === 'number') today_kwh = (today_kwh || 0) + r.total_kwh;
     });
   } catch (e) { /* fall through */ }
   document.getElementById('stat-today').textContent =
