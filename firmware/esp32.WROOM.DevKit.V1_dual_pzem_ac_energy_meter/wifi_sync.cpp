@@ -71,15 +71,26 @@ static void set_wifi_status(WifiStatus st) {
   }
 }
 
+// Set when new credentials are saved over BLE. The WL_CONNECTED fast path below
+// would otherwise keep reusing the OLD network forever, so a meter moved to a
+// new SSID from the app never actually switched until it lost the old one.
+static volatile bool s_reconnect_pending = false;
+void request_reconnect() { s_reconnect_pending = true; }
+
 static bool try_connect_known() {
+  bool reconnect = s_reconnect_pending;
+  s_reconnect_pending = false;
   // Already connected from a previous cycle? Reuse the link — re-scanning
   // and calling WiFi.begin() again every 2 min would otherwise force a
   // disconnect/reconnect and spam the log with the IDF's own
   // early-log noise (the bursts of high-bit bytes that locked_vprintf
   // can't catch because they're written via ets_printf).
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED && !reconnect) {
     set_wifi_status(WIFI_CONNECTED);
     return true;
+  }
+  if (reconnect && WiFi.status() == WL_CONNECTED) {
+    LOG_PRINTLN("[wifi] new credentials saved — dropping the current association");
   }
 
   storage::WifiCred creds[MAX_WIFI_CREDS];
@@ -357,8 +368,16 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   JsonArray readings = doc.createNestedArray("readings");
   uint64_t max_in_batch = 0;
   uint32_t included = 0;
+  // Set when the batch limit falls BETWEEN the rows of one seq (one per
+  // channel). The server acks the highest seq it saw and truncate_up_to()
+  // deletes every row <= that seq, so acking a half-sent seq would silently
+  // delete the other channel's row without it ever being uploaded.
+  bool split_seq = false;
   storage::stream_rows_up_to(snapshot_seq, [&](const storage::RowFields &r) -> bool {
-    if (included >= SYNC_BATCH_SIZE) return false;
+    if (included >= SYNC_BATCH_SIZE) {
+      split_seq = (r.seq == max_in_batch);
+      return false;
+    }
     JsonObject o = readings.createNestedObject();
     o["seq"] = r.seq;
     // 1-based PZEM channel. Rows from one sampling instant share `seq` and
@@ -372,6 +391,10 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     o["Wh"] = r.Wh;
     o["PF"] = r.PF;
     o["Hz"] = r.Hz;
+    // Wall-clock time of the sample (UTC epoch), when the clock was known.
+    // The server prefers it for rows from earlier boots, where the uptime
+    // chain cannot account for time spent powered off.
+    if (r.epoch) o["t"] = r.epoch;
     if (r.seq > max_in_batch) max_in_batch = r.seq;
     included++;
     return true;
@@ -579,25 +602,50 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
 #endif
   }
 
+  if (code == 409) {
+    // Seq collision: the server already holds different readings under some of
+    // these seqs (this unit's counter restarted, e.g. after a full flash erase).
+    // It stored nothing from this batch; renumber the buffer above its highest
+    // seq and resend straight away.
+    StaticJsonDocument<192> cdoc;
+    if (!deserializeJson(cdoc, resp) &&
+        strcmp(cdoc["error"] | "", "seq_collision") == 0) {
+      uint64_t floor_seq = cdoc["seq_floor"] | (uint64_t)0;
+      LOG_PRINTF("[wifi] server reports seq collision, floor=%llu — renumbering buffer\n",
+                 (unsigned long long)floor_seq);
+      if (storage::rebase_seq(floor_seq)) request_immediate_sync();
+      return false;
+    }
+  }
   if (code != 200) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  // Must hold the whole ingest response, including relay_channels[] — one entry
-  // per relay, each carrying a full open-hours schedule array. Sized by
-  // expression so it grows with the relay count instead of needing a manual
-  // bump: a fixed 2048 was already marginal at 2 relays with multi-window
-  // schedules and would overflow at 3. That matters because an overflowing
-  // StaticJsonDocument fails the parse OUTRIGHT — the device would log "bad
-  // response JSON" and silently stop picking up log_interval_sec AND its relay
-  // config, not just the part that didn't fit.
+  // Relay config arrives as relay_channels[] (one entry per relay, each with a
+  // full open-hours schedule). The filter keeps only the fields this function
+  // reads. An overflowing StaticJsonDocument fails the parse OUTRIGHT — the
+  // POST then counts as failed, so the rows it delivered are never truncated
+  // and get resent forever while the buffer fills, and no config is picked up.
   //
-  // static, not a local: at 3 relays this is ~3.3 KB, and the connectivity task
-  // shares its stack with the mbedTLS handshake (see CONN_TASK_STACK). Only
-  // this task calls post_batch(), so a single shared instance is safe.
-  static StaticJsonDocument<1024 + RELAY_COUNT * 768> rdoc;
+  // Sized for the server's limit of 8 open-hours windows per relay
+  // (admin_relay.php): 8 full-week windows on 2 relays measure 3,633 B on the
+  // 32-bit target, so this leaves ~12% headroom.
+  //
+  // static, not a local: the connectivity task shares its stack with the
+  // mbedTLS handshake (see CONN_TASK_STACK). Only this task calls post_batch(),
+  // so single shared instances are safe.
+  static StaticJsonDocument<1024 + RELAY_COUNT * 1536> rdoc;
+  static StaticJsonDocument<384> rfilter;
+  if (rfilter.isNull()) {
+    for (const char *k : {"ok", "acked_up_to_seq", "server_time", "log_interval_sec",
+        "nightly_reboot_enable", "nightly_reboot_start_hour", "nightly_reboot_end_hour",
+        "radio_rest_interval_sec", "radio_rest_duration_sec"}) {
+      rfilter[k] = true;
+    }
+    rfilter["relay_channels"] = true;
+  }
   rdoc.clear();
-  if (deserializeJson(rdoc, resp)) {
+  if (deserializeJson(rdoc, resp, DeserializationOption::Filter(rfilter))) {
     LOG_PRINTF("[wifi] bad response JSON: %s\n", resp.c_str());
     return false;
   }
@@ -607,6 +655,9 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   }
   uint64_t acked = rdoc["acked_up_to_seq"] | 0;
   if (acked == 0) acked = max_in_batch;
+  // Hold back the split seq: its other row(s) go out at the head of the next
+  // batch, and the rows already sent are re-sent as harmless duplicates.
+  if (split_seq && acked >= max_in_batch) acked = max_in_batch - 1;
   out_acked_seq = acked;
   s_last_successful_post_us = time_source::monotonic_us();
 
@@ -654,7 +705,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     }
   }
 
-  // Server-pushed relay config. Preferred form is per channel:
+  // Server-pushed relay config, one entry per relay:
   //   "relay_channels": [ {ch, version, schedule[], compressor_watts, grace_min} ]
   // so each relay gets its own open-hours window and cutoff knobs. An entry
   // with an out-of-range ch is ignored. relay::apply() is a no-op when nothing
@@ -671,22 +722,6 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
                    sched_json,
                    rc["compressor_watts"] | 0,   // 0 = leave unchanged
                    rc["grace_min"]        | 0);
-    }
-  } else if (rdoc.containsKey("relay_version")) {
-    // Legacy flat form (single-relay servers): one config for the whole device.
-    // Apply it to EVERY relay so a one-relay backend still drives this unit
-    // predictably rather than leaving relay 2 unconfigured.
-    uint32_t rv = rdoc["relay_version"] | 0;
-    String sched_json;
-    if (rdoc.containsKey("relay_schedule")) {
-      serializeJson(rdoc["relay_schedule"], sched_json);
-    } else {
-      sched_json = "[]";
-    }
-    uint32_t cw = rdoc["relay_compressor_watts"] | 0;   // 0 = leave unchanged
-    uint32_t gm = rdoc["relay_grace_min"]        | 0;   // 0 = leave unchanged
-    for (uint8_t r = 0; r < relay::count(); ++r) {
-      relay::apply(r, rv, sched_json, cw, gm);
     }
   }
 

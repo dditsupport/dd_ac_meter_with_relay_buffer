@@ -287,6 +287,15 @@ class AckCallbacks : public NimBLECharacteristicCallbacks {
     if (!is_authed(info)) return;
     std::string v = c->getValue();
     if (v.empty()) return;
+    // "rebase:<floor>" — the app relayed rows and the server answered with a
+    // seq collision (see storage::rebase_seq). Renumber instead of acking.
+    if (v.rfind("rebase:", 0) == 0) {
+      uint64_t floor_seq = strtoull(v.c_str() + 7, nullptr, 10);
+      if (storage::rebase_seq(floor_seq)) {
+        LOG_PRINTF("[ble] buffer renumbered above seq=%llu\n", (unsigned long long)floor_seq);
+      }
+      return;
+    }
     uint64_t acked = strtoull(v.c_str(), nullptr, 10);
     if (acked == 0) {
       LOG_PRINTF("[ble] ack bad value: %s\n", v.c_str());
@@ -498,6 +507,7 @@ class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
       s_wifi_status_json = out;
       s_char_wifi_status->setValue(to_std(s_wifi_status_json));
       s_char_wifi_status->notify();
+      wifi_sync::request_reconnect();
       wifi_sync::request_immediate_sync();
       LOG_PRINTF("[ble] wifi cred saved: %s, immediate sync requested\n", ssid.c_str());
     } else {
@@ -576,11 +586,15 @@ static void pump_stream() {
   chunk.reserve(mtu_payload + 64);
 
   storage::stream_rows_up_to(snap, [&](const storage::RowFields &r) -> bool {
+    // Stream layout (shared with the single-meter builds):
+    // seq,boot_id,sec,V,I,P,Wh,PF,Hz,ch,epoch — ch is the 1-based channel,
+    // epoch the wall-clock time (0 = clock unknown).
     char line[128];
     int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f\n",
+                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u,%u\n",
                      (unsigned long long)r.seq, r.boot_id, r.sec_since_boot,
-                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz);
+                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz, (unsigned)r.channel,
+                     (unsigned)r.epoch);
     if (n <= 0) return true;
     if (chunk.length() + n > mtu_payload) {
       s_char_stream->setValue((uint8_t *)chunk.c_str(), chunk.length());

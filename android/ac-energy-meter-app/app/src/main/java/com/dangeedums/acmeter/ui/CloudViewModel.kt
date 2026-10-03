@@ -42,6 +42,8 @@ data class CloudUi(
     val selectedChannel: Int = 1,
     val range: Range = Range.Today,
     val points: List<ReadingPoint> = emptyList(),
+    /** Server's whole-window total (see ReadingsResponse.total_kwh). */
+    val periodKwh: Double? = null,
     val loading: Boolean = false,
     val error: String? = null,
 )
@@ -205,10 +207,13 @@ class CloudViewModel(
         viewModelScope.launch {
             runCatching { client.readings(dev, r.aggregate, fromIso = fromIso, channel = ch) }
                 .onSuccess { resp ->
-                    _ui.value = _ui.value.copy(
-                        loading = false,
-                        points = resp.points,
-                    )
+                    _ui.value = if (resp.ok) {
+                        _ui.value.copy(loading = false, points = resp.points, periodKwh = resp.total_kwh)
+                    } else {
+                        // e.g. 403 no_such_device: say so instead of an empty chart.
+                        _ui.value.copy(loading = false, points = emptyList(), periodKwh = null,
+                                       error = resp.error ?: "server rejected the request")
+                    }
                 }
                 .onFailure { _ui.value = _ui.value.copy(loading = false, error = it.message ?: "fetch failed") }
         }

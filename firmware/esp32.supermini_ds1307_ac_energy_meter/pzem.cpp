@@ -13,39 +13,16 @@ static uint8_t s_fail_streak = 0;
 static uint64_t s_low_v_start_us = 0;
 static bool s_low_v_active = false;
 
-#if PZEM_DEMO_MODE
-static float s_demo_energy_wh = 0.0f;
-#endif
-
 void begin() {
-#if PZEM_DEMO_MODE
-  LOG_PRINTLN("[pzem] DEMO MODE: synthetic readings, hardware not queried");
-  return;
-#else
   // PZEM-004T-v30 (mandulaj) takes (HardwareSerial&, rxPin, txPin) and runs
   // the port's begin() internally — no need for an external begin() call.
   // The ESP32-C3 has only UART0/UART1, so we use Serial1 (UART0 backs the
   // USB-CDC console). rxPin = C3's RX (GPIO 20, connected to PZEM TX);
   // txPin = C3's TX (GPIO 21, connected to PZEM RX).
   s_pzem = new PZEM004Tv30(Serial1, PIN_PZEM_RX, PIN_PZEM_TX);
-#endif
 }
 
 bool read(PzemSample &out) {
-#if PZEM_DEMO_MODE
-  // Simple synthetic generator: 230 V mains, current slowly rising/falling
-  // with a sine wave, power = V * I, PF ~1, 50 Hz, energy integrates over time.
-  float t = (float)(time_source::monotonic_us() / 1000000ULL);
-  float i = 4.0f + 3.5f * sinf(t * 0.05f);   // 0.5 .. 7.5 A
-  out.voltage   = 230.0f + 1.5f * sinf(t * 0.13f);
-  out.current   = i < 0 ? 0 : i;
-  out.power     = out.voltage * out.current;
-  s_demo_energy_wh += out.power / 3600.0f;   // ~1 sample/sec assumed
-  out.energy_wh = s_demo_energy_wh;
-  out.pf        = 0.98f;
-  out.frequency = 50.0f;
-  return true;
-#else
   if (!s_pzem) return false;
   // Retry a missed Modbus transaction a couple times before failing. Each
   // s_pzem->voltage() call refreshes all registers in one transaction (the
@@ -72,7 +49,6 @@ bool read(PzemSample &out) {
     return true;
   }
   return false;
-#endif
 }
 
 PzemStatus classify(bool ok, const PzemSample &sample) {

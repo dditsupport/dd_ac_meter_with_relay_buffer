@@ -34,20 +34,11 @@ static uint64_t     s_low_v_start_us[PZEM_CHANNELS] = {0};
 static bool         s_low_v_active[PZEM_CHANNELS]   = {false};
 static volatile bool s_reset_requested[PZEM_CHANNELS] = {false};
 
-#if PZEM_DEMO_MODE
-static float s_demo_energy_wh[PZEM_CHANNELS] = {0.0f};
-#endif
-
 uint8_t channel_count() { return PZEM_CHANNELS; }
 
 static inline bool valid_ch(uint8_t ch) { return ch < PZEM_CHANNELS; }
 
 void begin() {
-#if PZEM_DEMO_MODE
-  LOG_PRINTF("[pzem] DEMO MODE: %u synthetic channels, hardware not queried\n",
-             (unsigned)PZEM_CHANNELS);
-  return;
-#else
   // PZEM004Tv30 (mandulaj) takes (HardwareSerial&, rxPin, txPin, addr) and runs
   // the port's begin() internally — no external begin() call needed. rxPin is
   // the ESP32's RX (wired to the PZEM's TX) and vice versa.
@@ -58,25 +49,10 @@ void begin() {
                (unsigned)(ch + 1), s_cfg[ch].rx_pin, s_cfg[ch].tx_pin,
                s_cfg[ch].addr);
   }
-#endif
 }
 
 bool read(uint8_t ch, PzemSample &out) {
   if (!valid_ch(ch)) return false;
-#if PZEM_DEMO_MODE
-  // Synthetic generator, phase-shifted per channel so the two meters don't
-  // produce identical curves while bench-testing.
-  float t = (float)(time_source::monotonic_us() / 1000000ULL) + ch * 37.0f;
-  float i = 4.0f + 3.5f * sinf(t * 0.05f);   // 0.5 .. 7.5 A
-  out.voltage   = 230.0f + 1.5f * sinf(t * 0.13f);
-  out.current   = i < 0 ? 0 : i;
-  out.power     = out.voltage * out.current;
-  s_demo_energy_wh[ch] += out.power / 3600.0f;   // ~1 sample/sec assumed
-  out.energy_wh = s_demo_energy_wh[ch];
-  out.pf        = 0.98f;
-  out.frequency = 50.0f;
-  return true;
-#else
   if (!s_pzem[ch]) return false;
   // Retry a missed Modbus transaction a couple times before failing. Each
   // voltage() call refreshes all registers in one transaction, so the inter-try
@@ -102,7 +78,6 @@ bool read(uint8_t ch, PzemSample &out) {
     return true;
   }
   return false;
-#endif
 }
 
 PzemStatus classify(uint8_t ch, bool ok, const PzemSample &sample) {

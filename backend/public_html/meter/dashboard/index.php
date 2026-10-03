@@ -28,6 +28,13 @@ if (!empty($user['is_admin'])) {
     $dev_rows = $st->fetchAll();
 }
 $selected = $_GET['device_id'] ?? ($dev_rows[0]['device_id'] ?? '');
+// Only a device from the visibility list above may be selected. The readings
+// API re-checks access, but this page also reads device meta (relay state,
+// channel count) for $selected directly, so an arbitrary ?device_id= would
+// expose another account's device.
+if (!in_array($selected, array_column($dev_rows, 'device_id'), true)) {
+    $selected = $dev_rows[0]['device_id'] ?? '';
+}
 $selected_meta = null;
 foreach ($dev_rows as $d) {
     if ($d['device_id'] === $selected) { $selected_meta = $d; break; }
@@ -514,7 +521,7 @@ async function loadRange(rangeKey){
   // them into one series without making the kWh figures meaningless.
   const per = await Promise.all(CHANNELS.map(async ch => {
     const j = await (await fetch(readingsUrl(R.aggregate, ch), { credentials: 'same-origin' })).json();
-    if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0, latest: null };
+    if (!j.ok) return { ch, ok: false, energy: [], power: [], total: 0, baseline: 0, latest: null, peak: 0 };
 
     // Readings that continue from the meter this device replaced.
     //
@@ -541,10 +548,16 @@ async function loadRange(rangeKey){
     // powerAggregate is set, pull the power series from its own request so
     // short ranges plot every posted reading instead of an hourly average.
     let power = j.points.map(p => ({ t: p.t, y: p.P_avg }));
+    // True peak: each bucket's MAX(power_w). The plotted line is the bucket
+    // AVERAGE, so its maximum understated the peak on the daily/monthly views.
+    let peak = j.points.reduce((m, p) => Math.max(m, p.P_peak || 0), 0);
     if (R.powerAggregate && R.powerAggregate !== R.aggregate) {
       try {
         const pr = await (await fetch(readingsUrl(R.powerAggregate, ch), { credentials: 'same-origin' })).json();
-        if (pr.ok) power = pr.points.map(p => ({ t: p.t, y: p.P_avg }));
+        if (pr.ok) {
+          power = pr.points.map(p => ({ t: p.t, y: p.P_avg }));
+          peak  = pr.points.reduce((m, p) => Math.max(m, p.P_peak || 0), peak);
+        }
       } catch (e) { /* keep the coarser power series on error */ }
     }
 
@@ -553,7 +566,7 @@ async function loadRange(rangeKey){
       : energy.reduce((a, p) => a + (p.y || 0), 0);
     // Where this meter's counter stands now, continuing from the old meter.
     const latest = typeof j.latest_kwh === 'number' ? j.latest_kwh + offset : null;
-    return { ch, ok: true, energy, power, total, baseline: base, latest };
+    return { ch, ok: true, energy, power, total, baseline: base, latest, peak };
   }));
 
   if (!per.some(r => r.ok)) { alert('Error loading readings'); return; }
@@ -621,8 +634,7 @@ async function loadRange(rangeKey){
     readings.length ? 'Meter reading: ' + readings.join('<br>') : '';
   renderReadings(per, R);
 
-  const peakP = per.reduce((m, r) =>
-    Math.max(m, r.power.reduce((n, p) => Math.max(n, p.y || 0), 0)), 0);
+  const peakP = per.reduce((m, r) => Math.max(m, r.peak || 0), 0);
   document.getElementById('stat-total').textContent = periodTotal.toFixed(2);
   document.getElementById('stat-peak').textContent  = peakP.toFixed(0);
 
@@ -632,7 +644,7 @@ async function loadRange(rangeKey){
   if (MULTI) {
     pmEl.innerHTML = '';
     per.forEach(r => {
-      const peak = r.power.reduce((n, p) => Math.max(n, p.y || 0), 0);
+      const peak = r.peak || 0;
       const d = document.createElement('div');
       d.className = 'stat';
       d.dataset.ch = String(r.ch);   // loadLive() fills in the live watts below

@@ -234,7 +234,7 @@ static void handle_serial_command(const String &cmd) {
     // has something to send. Useful for end-to-end testing without
     // waiting LOG_INTERVAL_SEC.
     SharedState snap;
-    if (state_snapshot(snap)) {
+    if (state_snapshot(snap) && storage::seq_lock(pdMS_TO_TICKS(2000))) {
       uint64_t seq = storage::last_seq() + 1;
       bool wrote_any = false;
       // One row per channel, sharing this seq — same shape the sampling task
@@ -251,6 +251,7 @@ static void handle_serial_command(const String &cmd) {
         rf.Wh = snap.ch[ch].latest.energy_wh;
         rf.PF = snap.ch[ch].latest.pf;
         rf.Hz = snap.ch[ch].latest.frequency;
+        rf.epoch = (uint32_t)time_source::wall_time();   // 0 if clock unknown
         if (storage::append_row(rf)) wrote_any = true;
       }
       if (wrote_any) {
@@ -261,6 +262,7 @@ static void handle_serial_command(const String &cmd) {
       } else {
         LOG_PRINTLN("[cmd] append_row failed (buffer full?)");
       }
+      storage::seq_unlock();
     }
   } else {
     LOG_PRINTF("unknown command: %s (try DUMP, BOOTS, CLEAR, CLEARBOOTS, WIFI, INFO, SYNC, LOG)\n",
@@ -416,7 +418,12 @@ static void sampling_task(void *) {
     // and falls back to LOG_INTERVAL_SEC_DEFAULT (config.h) on a fresh device.
     // One sampling instant emits one row PER CHANNEL, all sharing `seq`.
     uint32_t log_period_sec = storage::log_interval_sec();
-    if ((uint64_t)(now_us - last_log_us) >= (uint64_t)log_period_sec * 1000000ULL) {
+    // Hold the seq lock across seq assignment -> append -> set_last_seq so a
+    // concurrent rebase_seq() (server-reported seq collision) cannot renumber
+    // the buffer in between. Only a rebase holds it for long; if it is busy,
+    // leave last_log_us alone and log on the next 1 s tick instead.
+    if ((uint64_t)(now_us - last_log_us) >= (uint64_t)log_period_sec * 1000000ULL &&
+        storage::seq_lock(pdMS_TO_TICKS(200))) {
       last_log_us = now_us;
       if (any_ok) {
         uint64_t seq = storage::last_seq() + 1;
@@ -435,6 +442,7 @@ static void sampling_task(void *) {
           rf.Wh = sample[ch].energy_wh;
           rf.PF = sample[ch].pf;
           rf.Hz = sample[ch].frequency;
+          rf.epoch = (uint32_t)time_source::wall_time();   // 0 if clock unknown
           if (storage::append_row(rf)) wrote_any = true;
         }
         if (wrote_any) {
@@ -450,6 +458,7 @@ static void sampling_task(void *) {
           wifi_sync::request_immediate_sync();
         }
       }
+      storage::seq_unlock();
     }
 
     // Mark clean uptime after passing the boot-loop window.

@@ -24,6 +24,13 @@ if (!empty($user['is_admin'])) {
     $dev_rows = $st->fetchAll();
 }
 $selected = $_GET['device_id'] ?? ($dev_rows[0]['device_id'] ?? '');
+// Only a device from the visibility list above may be selected. The readings
+// API re-checks access, but this page also reads device meta (relay state,
+// channel count) for $selected directly, so an arbitrary ?device_id= would
+// expose another account's device.
+if (!in_array($selected, array_column($dev_rows, 'device_id'), true)) {
+    $selected = $dev_rows[0]['device_id'] ?? '';
+}
 
 // A multi-meter device stores each meter under the same device_id with a
 // different `channel`, so a report must be scoped to ONE meter — they are

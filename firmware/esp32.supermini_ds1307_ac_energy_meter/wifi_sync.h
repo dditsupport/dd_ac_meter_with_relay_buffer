@@ -18,6 +18,9 @@ bool is_radio_busy();
 // waiting for the next periodic tick. Called by ble_service::WifiCfgCallbacks
 // after a successful credential write.
 void request_immediate_sync();
+// New credentials were saved: make the next cycle drop the current
+// association and connect with them, instead of reusing the old link.
+void request_reconnect();
 
 // Returns true (and clears) if an immediate-sync request is pending.
 bool consume_immediate_sync_request();

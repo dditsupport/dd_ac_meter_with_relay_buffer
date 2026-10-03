@@ -332,12 +332,16 @@ class DeviceDetailViewModel(
      * ingest payload, POST it to MilesWeb, then ACK the highest seq back
      * to the device so it truncates /log.csv.
      */
-    fun syncNow() {
+    fun syncNow(afterRebase: Boolean = false) {
         viewModelScope.launch {
             try {
                 _ui.value = _ui.value.copy(syncStage = SyncStage.Reading, syncRows = 0,
                                             syncMessage = "Subscribing to data stream…")
                 val info  = gatt.readDeviceInfo()
+                // Uptime is read now but sync_wall_time is stamped after the
+                // stream, which can take most of a minute; carry the uptime
+                // forward by the elapsed time so current-boot rows aren't late.
+                val infoReadAt = System.nanoTime()
                 val boots = gatt.readBootHistory()
 
                 // Accumulate stream until "END\n" arrives.
@@ -366,11 +370,24 @@ class DeviceDetailViewModel(
                     fw_version             = info.fw,
                     sync_wall_time         = nowIso(),
                     current_boot_id        = info.currentBootId,
-                    current_boot_uptime_sec= info.uptimeSec,
+                    current_boot_uptime_sec= info.uptimeSec +
+                        (System.nanoTime() - infoReadAt) / 1_000_000_000L,
                     boot_history           = boots.map { IngestBoot(it.bootId, it.durationSec) },
                     readings               = rows,
                 )
                 val resp = cloud.ingest(s.deviceToken, payload)
+
+                // The server already holds different readings under some of these
+                // seqs (the meter's counter restarted, e.g. after a full flash
+                // erase) and stored none of this upload. Have the meter renumber
+                // above the server's highest seq, then upload again — once.
+                if (!resp.ok && resp.error == "seq_collision" && resp.seq_floor > 0 && !afterRebase) {
+                    _ui.value = _ui.value.copy(syncMessage = "Renumbering readings on the meter…")
+                    gatt.writeSeqRebase(resp.seq_floor)
+                    kotlinx.coroutines.delay(1500)   // let the firmware rewrite its log
+                    syncNow(afterRebase = true)
+                    return@launch
+                }
 
                 if (!resp.ok) {
                     val msg = when (resp.error) {
@@ -378,6 +395,7 @@ class DeviceDetailViewModel(
                         "bad_csrf"                   -> "Session expired. Sign out & in on the Cloud tab, then retry."
                         "device_owned_by_other_user" -> "This device is bound to a different user. Ask an admin to re-bind it."
                         "missing_fields", "invalid_json" -> "Sync payload was rejected by the server (${resp.error})."
+                        "seq_collision"              -> "Meter reading numbers still clash with the server's after renumbering. Sync again."
                         null                          -> "Server rejected the upload."
                         else                          -> "Server: ${resp.error}"
                     }
@@ -494,8 +512,9 @@ class DeviceDetailViewModel(
         text.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isEmpty() || trimmed == "END") return@forEach
+            // seq,boot_id,sec,V,I,P,Wh,PF,Hz,ch,epoch (every firmware build)
             val parts = trimmed.split(',')
-            if (parts.size < 8) return@forEach
+            if (parts.size != 11) return@forEach
             runCatching {
                 out += IngestReading(
                     seq     = parts[0].toLong(),
@@ -506,7 +525,10 @@ class DeviceDetailViewModel(
                     P  = parts[5].toDouble(),
                     Wh = parts[6].toDouble(),
                     PF = parts[7].toDouble(),
-                    Hz = parts.getOrNull(8)?.toDoubleOrNull(),
+                    Hz = parts[8].toDouble(),
+                    ch = parts[9].toInt(),
+                    // 0 means the meter's clock was unknown when it sampled.
+                    t = parts[10].toLong().takeIf { it > 0 },
                 )
             }
         }

@@ -242,13 +242,6 @@
 #define PZEM_READ_ATTEMPTS      3
 #define PZEM_READ_RETRY_MS      250
 
-// ---------- Demo mode ----------
-// Set to 1 to bypass the real PZEM and feed the rest of the firmware
-// synthetic (but plausible) readings. Lets you bench-test the LittleFS
-// logging, Wi-Fi sync, and BLE characteristics without having
-// the PZEM physically wired. Leave at 0 for production / real measurements.
-#define PZEM_DEMO_MODE          0
-
 // ---------- Boot-loop guard ----------
 #define BOOTLOOP_WINDOW_SEC     60
 #define BOOTLOOP_THRESHOLD      5         // boots inside the window -> BLE-only mode

@@ -10,6 +10,10 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_db.php';
 
+// Same floor the firmware applies to its own clock (2023-11-14): anything
+// earlier is an unset RTC, not a real sample time.
+const MIN_PLAUSIBLE_EPOCH = 1700000000;
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_response(405, ['ok' => false, 'error' => 'method_not_allowed']);
 }
@@ -71,6 +75,13 @@ if ($coincell_mv !== null && $coincell_mv < 0) $coincell_mv = null;
 if ($device_id === '' || $current_bid <= 0) {
     log_ingest($device_id, 0, 0, 'missing_fields', null);
     json_response(400, ['ok' => false, 'error' => 'missing_fields']);
+}
+// Same shape claim_device.php enforces. Without it an over-long id was
+// silently truncated by the INSERT IGNORE below, then made the next insert fail
+// with an uncaught "data too long" (500).
+if (!preg_match('/^[A-Za-z0-9_\-:.]{1,32}$/', $device_id)) {
+    log_ingest(substr($device_id, 0, 32), 0, 0, 'bad_device_id', null);
+    json_response(400, ['ok' => false, 'error' => 'bad_device_id']);
 }
 
 $pdo = db();
@@ -264,10 +275,20 @@ if ($sync_epoch === null) {
     $sync_epoch = time();
 }
 
-$inserted = 0;
-$max_seq  = 0;
+$inserted  = 0;
+$max_seq   = 0;
+$collision = null;   // [seq, channel] of the first seq collision, if any
 $pdo->beginTransaction();
 try {
+    // Looks up the row already stored under a key this POST collided with, to
+    // tell a harmless resend (same row, firmware retry or BLE + Wi-Fi both
+    // delivering it) from a seq COLLISION: a different reading under a reused
+    // seq. That happens when a device loses its counter (full flash erase, or
+    // a replacement board on the same device ID) and starts again at seq 1.
+    $dup = $pdo->prepare(
+        'SELECT boot_id, sec_since_boot, energy_wh FROM ed_energy_readings
+          WHERE device_id = ? AND seq = ? AND channel = ?'
+    );
     $ins = $pdo->prepare(
         'INSERT INTO ed_energy_readings
            (device_id, seq, channel, wall_time, time_confidence, boot_id, sec_since_boot,
@@ -284,11 +305,33 @@ try {
         // firmware omits it, so default to channel 1.
         $ch  = (int)($r['ch'] ?? 1);
         if ($ch < 1) $ch = 1;
-        if ($seq <= 0 || $bid <= 0 || !isset($offsets[$bid])) continue;
+        // Device wall-clock time of the sample (UTC epoch), sent by firmware
+        // that stamps rows from its DS1307/NTP clock; absent or 0 when the
+        // clock was unknown at sampling time. Ignored unless plausible.
+        $t   = (int)($r['t'] ?? 0);
+        $t_ok = $t >= MIN_PLAUSIBLE_EPOCH && $t <= time() + 86400;
+        if ($seq <= 0 || $bid <= 0) continue;
 
-        $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
-        $wt_str   = date('Y-m-d H:i:s', $wt_epoch);
-        $conf     = ($bid === $current_bid) ? 'exact' : 'approx';
+        if ($bid === $current_bid && isset($offsets[$bid])) {
+            // Current boot: uptime is continuous up to sync_wall_time, so the
+            // chain is exact and immune to any error in the device clock.
+            $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
+            $conf     = 'exact';
+        } elseif ($t_ok) {
+            // Earlier boot: the chain only adds up uptimes, so it cannot see how
+            // long the unit sat powered off between boots and would place these
+            // rows late by the length of the outage. The device clock can.
+            $wt_epoch = $t;
+            $conf     = 'exact';
+        } elseif (isset($offsets[$bid])) {
+            // Earlier boot from older firmware, or sampled before the clock was
+            // known: fall back to the chain estimate.
+            $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
+            $conf     = 'approx';
+        } else {
+            continue;
+        }
+        $wt_str = date('Y-m-d H:i:s', $wt_epoch);
 
         $ins->execute([
             $device_id,
@@ -305,8 +348,34 @@ try {
             (float)($r['PF'] ?? 0),
             isset($r['Hz']) ? (float)$r['Hz'] : null,
         ]);
-        if ($ins->rowCount() > 0) $inserted++;
+        if ($ins->rowCount() > 0) {
+            $inserted++;
+        } else {
+            $dup->execute([$device_id, $seq, $ch]);
+            $old = $dup->fetch();
+            $wh  = round((float)($r['Wh'] ?? 0), 2);
+            if ($old && ((int)$old['boot_id'] !== $bid ||
+                         (int)$old['sec_since_boot'] !== $sec ||
+                         abs((float)$old['energy_wh'] - $wh) > 1.0)) {
+                $collision = [$seq, $ch];
+                break;
+            }
+        }
         if ($seq > $max_seq) $max_seq = $seq;
+    }
+
+    if ($collision !== null) {
+        // Insert nothing from this batch: the device renumbers ALL its buffered
+        // rows above seq_floor and resends them, so anything kept from this
+        // attempt would be stored twice under two different seqs.
+        $pdo->rollBack();
+        $fl = $pdo->prepare('SELECT COALESCE(MAX(seq), 0) FROM ed_energy_readings WHERE device_id = ?');
+        $fl->execute([$device_id]);
+        $seq_floor = (int)$fl->fetchColumn();
+        log_ingest($device_id, count($readings), 0, 'seq_collision',
+                   "seq={$collision[0]} ch={$collision[1]} floor={$seq_floor}");
+        // 409, not 200: the firmware treats a 200 as an ack and truncates.
+        json_response(409, ['ok' => false, 'error' => 'seq_collision', 'seq_floor' => $seq_floor]);
     }
 
     $pdo->prepare(
@@ -351,15 +420,12 @@ foreach (maintenance_config_for_response(device_maintenance_config($pdo, $device
     $resp[$k] = $v;
 }
 
-// Attach the relay config (if any). schedule_json = AC-allowed open hours;
-// compressor_watts / grace_min tune the compressor-aware cutoff. Firmware uses
-// 'relay_version' to skip reapplying when nothing has changed. The compressor
-// columns are selected in a guarded query so a DB that hasn't run migration
-// 005 still serves the schedule.
-// A dual-PZEM unit has one relay per meter, each with its own row keyed by
-// channel, so fetch ALL of this device's rows and send them as relay_channels[].
-// The flat relay_* fields are still emitted from channel 1 so a single-relay
-// firmware keeps working unchanged.
+// Attach the relay config (if any) as relay_channels[], one entry per relay
+// row: schedule = AC-allowed open hours; compressor_watts / grace_min tune the
+// compressor-aware cutoff; the firmware uses `version` to skip reapplying when
+// nothing has changed. Single-relay firmware reads the ch 1 entry. The
+// compressor columns are selected in a guarded query so a DB that hasn't run
+// migration 005 still serves the schedule.
 $srows = [];
 try {
     $st = $pdo->prepare(
@@ -404,17 +470,6 @@ if ($srows) {
         $channels[] = $entry;
     }
     $resp['relay_channels'] = $channels;
-
-    // Back-compat: flat fields mirror channel 1 (or the first row present).
-    $first = $channels[0];
-    $resp['relay_version']  = $first['version'];
-    $resp['relay_schedule'] = $first['schedule'];
-    if (isset($first['compressor_watts'])) {
-        $resp['relay_compressor_watts'] = $first['compressor_watts'];
-    }
-    if (isset($first['grace_min'])) {
-        $resp['relay_grace_min'] = $first['grace_min'];
-    }
 }
 
 json_response(200, $resp);

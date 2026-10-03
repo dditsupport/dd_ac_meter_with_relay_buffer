@@ -1,4 +1,5 @@
 #pragma once
+#include <freertos/FreeRTOS.h>
 
 #include <Arduino.h>
 #include <functional>
@@ -24,7 +25,12 @@ struct RowFields {
   float P;
   float Wh;
   float PF;
-  float Hz;  // mains frequency; appended in the v2 row format
+  float Hz;  // mains frequency
+  // Wall-clock UTC epoch when the row was sampled, from the DS1307/NTP clock;
+  // 0 = clock not known yet. Lets the server timestamp rows from an earlier
+  // boot directly instead of estimating from uptimes, which cannot see how
+  // long the power was off between boots.
+  uint32_t epoch = 0;
 };
 
 // Mount LittleFS, run crash recovery (delete /log.tmp, validate last line),
@@ -36,6 +42,10 @@ bool begin();
 uint32_t boot_id();
 uint64_t last_seq();
 void set_last_seq(uint64_t seq);  // updates RAM and writes HWM to NVS if needed
+// Serialises seq assignment against rebase_seq(). Writers hold it across
+// "seq = last_seq() + 1 -> append_row() -> set_last_seq(seq)".
+bool seq_lock(TickType_t ticks);
+void seq_unlock();
 uint64_t seq_hwm();
 
 // Append the current boot's record once duration is known (e.g. on graceful shutdown).
@@ -146,6 +156,12 @@ uint64_t snapshot_max_seq();
 // Rewrite /log.csv keeping only rows with seq > acked_seq.
 // Blocks log appends only during the brief rename. Returns true on success.
 bool truncate_up_to(uint64_t acked_seq);
+
+// The server reported a seq collision (this device's counter restarted, e.g.
+// after a full flash erase, and reused seqs it already holds). Renumber every
+// buffered row so the lowest lands at seq_floor + 1, and move last_seq and the
+// NVS high-water mark above it. No-op if the buffer is already above it.
+bool rebase_seq(uint64_t seq_floor);
 
 // Free space in bytes on the LittleFS partition.
 uint32_t free_bytes();
