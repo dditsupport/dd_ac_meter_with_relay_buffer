@@ -507,6 +507,9 @@ class DeviceDetailViewModel(
                     Wh = parts[6].toDouble(),
                     PF = parts[7].toDouble(),
                     Hz = parts.getOrNull(8)?.toDoubleOrNull(),
+                    // Trailing channel field (dual-meter firmware); single-meter
+                    // firmware omits it and is always channel 1.
+                    ch = parts.getOrNull(9)?.toIntOrNull()?.takeIf { it >= 1 } ?: 1,
                 )
             }
         }

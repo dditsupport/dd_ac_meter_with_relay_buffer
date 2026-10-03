@@ -149,6 +149,9 @@ data class IngestReading(
     val Wh: Double,
     val PF: Double,
     val Hz: Double? = null,
+    /** 1-based PZEM channel. Dual-meter firmware sends it as the 10th stream
+     *  field; without it the server files every row under channel 1. */
+    val ch: Int = 1,
 )
 
 @Serializable
