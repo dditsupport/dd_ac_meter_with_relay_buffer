@@ -193,9 +193,18 @@ Rows are buffered on the device as `seq,[ch,]boot_id,sec,V,I,P,Wh,PF,Hz,epoch`
 ## Aggregations
 
 `readings.php?aggregate=hourly|daily|monthly` groups rows by bucket and
-computes energy generated in the bucket as
-`(MAX(energy_wh) - MIN(energy_wh)) / 1000` — works because the PZEM's
-`Wh` counter is monotonically increasing. Also returns `P_avg`,
+computes energy used in the bucket as
+`(MAX(energy_cum_wh) - MIN(energy_cum_wh)) / 1000`.
+
+`energy_cum_wh` is a continuous per-channel counter that `ingest.php` fills
+from the raw PZEM register (`energy_wh`), comparing each reading with the
+channel's previous one: a normal step adds the difference; a wrap past
+9999.99 kWh adds the span across it; a drop (energy reset, or a fresh PZEM
+fitted) or a jump larger than 26 kW could produce in the gap (a used PZEM
+fitted) adds nothing, and counting resumes from the new value. Charts, totals
+and the dashboard's meter reading therefore stay continuous across all of
+those. Migration `015_energy_cum_wh.sql` adds the column and recomputes it for
+stored rows (MySQL 8+ / MariaDB 10.2+). Also returns `P_avg`,
 `P_peak`, `V_avg`, `samples`, and `approx` (true if any rows in the
 bucket had `time_confidence='approx'`).
 
