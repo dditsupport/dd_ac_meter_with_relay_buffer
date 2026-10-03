@@ -6,8 +6,18 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <time.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace relay {
+
+// Guards the schedule String(s). apply() replaces a schedule from the
+// connectivity task while loop() parses it in tick(); reassigning an Arduino
+// String frees its old buffer, so an unguarded reader could parse freed memory.
+// Readers take a private copy under the lock and parse that.
+static SemaphoreHandle_t s_sched_mtx = nullptr;
+static inline void sched_lock()   { if (s_sched_mtx) xSemaphoreTake(s_sched_mtx, portMAX_DELAY); }
+static inline void sched_unlock() { if (s_sched_mtx) xSemaphoreGive(s_sched_mtx); }
 
 // Cached config. Parsed lazily on tick(); we keep the raw schedule string in
 // NVS so cutoff survives reboots even before the first sync.
@@ -58,6 +68,7 @@ static const char *sm_str(SmState s) {
 }
 
 void begin() {
+  if (!s_sched_mtx) s_sched_mtx = xSemaphoreCreateMutex();
   pinMode(PIN_RELAY, OUTPUT);
   write_pin(false);  // fail-safe: de-energized = AC on at boot
 
@@ -94,24 +105,29 @@ void apply(uint32_t version, const String &schedule_json_array,
                          : s_grace_min;
 
   // Skip if nothing changed.
+  sched_lock();
   if (version == s_version && new_sched == s_schedule_json &&
-      new_cw == s_compressor_watts && new_gm == s_grace_min) return;
+      new_cw == s_compressor_watts && new_gm == s_grace_min) {
+    sched_unlock();
+    return;
+  }
 
   s_schedule_json    = new_sched;
   s_version          = version;
   s_compressor_watts = new_cw;
   s_grace_min        = new_gm;
+  sched_unlock();
 
   Preferences p;
   p.begin("relay", false);
-  p.putString("sched", s_schedule_json);
+  p.putString("sched", new_sched);
   p.putUInt("ver", s_version);
   p.putUInt("cw",  s_compressor_watts);
   p.putUInt("gm",  s_grace_min);
   p.end();
   LOG_PRINTF("[relay] config updated v=%u cw=%uW grace=%umin: %s\n",
                 (unsigned)s_version, (unsigned)s_compressor_watts,
-                (unsigned)s_grace_min, s_schedule_json.c_str());
+                (unsigned)s_grace_min, new_sched.c_str());
   // The next loop() tick (<=50 ms) re-evaluates and drives the GPIO. We do NOT
   // call tick() here: apply() runs in the connectivity task, and tick() (the
   // stateful cutoff machine) is driven solely by loop() so its state is never
@@ -179,7 +195,11 @@ static bool day_in(JsonArray days, int dow) {
 // True if the cached schedule has at least one usable window. An empty
 // schedule means "unconfigured" -> AC always allowed (fail-safe, never cut).
 static bool schedule_configured() {
-  return s_initialised && s_schedule_json.length() > 2;
+  if (!s_initialised) return false;
+  sched_lock();
+  bool configured = s_schedule_json.length() > 2;
+  sched_unlock();
+  return configured;
 }
 
 // Returns whether AC is ALLOWED (open hours) at (dow, minute) given the cached
@@ -192,8 +212,18 @@ static bool schedule_configured() {
 //     Tue 02:00). The selected days are the START days.
 // Multiple windows OR together.
 static bool ac_allowed(int dow, int minute) {
-  StaticJsonDocument<1024> doc;
-  if (deserializeJson(doc, s_schedule_json)) return false;
+  sched_lock();
+  String sched = s_schedule_json;
+  sched_unlock();
+  StaticJsonDocument<2048> doc;
+  if (deserializeJson(doc, sched)) {
+    // Unparseable (corrupt, or too many windows for the buffer): treat as
+    // allowed, the same fail-safe as an unconfigured relay. Returning false
+    // here used to read as "off hours" and cut the AC all day.
+    static bool logged = false;
+    if (!logged) { LOG_PRINTLN("[relay] schedule unparseable — failing safe (AC allowed)"); logged = true; }
+    return true;
+  }
   JsonArray arr = doc.as<JsonArray>();
   if (arr.isNull() || arr.size() == 0) return false;
 

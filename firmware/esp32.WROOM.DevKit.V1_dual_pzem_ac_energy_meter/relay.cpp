@@ -6,8 +6,18 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <time.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace relay {
+
+// Guards the schedule String(s). apply() replaces a schedule from the
+// connectivity task while loop() parses it in tick(); reassigning an Arduino
+// String frees its old buffer, so an unguarded reader could parse freed memory.
+// Readers take a private copy under the lock and parse that.
+static SemaphoreHandle_t s_sched_mtx = nullptr;
+static inline void sched_lock()   { if (s_sched_mtx) xSemaphoreTake(s_sched_mtx, portMAX_DELAY); }
+static inline void sched_unlock() { if (s_sched_mtx) xSemaphoreGive(s_sched_mtx); }
 
 // GPIO per relay. Index == PZEM channel index (0 == "relay 1" / "PZEM 1").
 static const int s_pin[RELAY_COUNT] = {
@@ -80,6 +90,7 @@ static void rkey(char *out, size_t n, const char *base, uint8_t r) {
 uint8_t count() { return RELAY_COUNT; }
 
 void begin() {
+  if (!s_sched_mtx) s_sched_mtx = xSemaphoreCreateMutex();
   Preferences p;
   p.begin("relay", true);  // read-only first
   for (uint8_t r = 0; r < RELAY_COUNT; ++r) {
@@ -130,18 +141,23 @@ void apply(uint8_t r, uint32_t version, const String &schedule_json_array,
                          : st.grace_min;
 
   // Skip if nothing changed.
+  sched_lock();
   if (version == st.version && new_sched == st.schedule_json &&
-      new_cw == st.compressor_watts && new_gm == st.grace_min) return;
+      new_cw == st.compressor_watts && new_gm == st.grace_min) {
+    sched_unlock();
+    return;
+  }
 
   st.schedule_json    = new_sched;
   st.version          = version;
   st.compressor_watts = new_cw;
   st.grace_min        = new_gm;
+  sched_unlock();
 
   Preferences p;
   p.begin("relay", false);
   char k[16];
-  rkey(k, sizeof(k), "sched", r); p.putString(k, st.schedule_json);
+  rkey(k, sizeof(k), "sched", r); p.putString(k, new_sched);
   rkey(k, sizeof(k), "ver",   r); p.putUInt(k, st.version);
   rkey(k, sizeof(k), "cw",    r); p.putUInt(k, st.compressor_watts);
   rkey(k, sizeof(k), "gm",    r); p.putUInt(k, st.grace_min);
@@ -149,7 +165,7 @@ void apply(uint8_t r, uint32_t version, const String &schedule_json_array,
   LOG_PRINTF("[relay%u] config updated v=%u cw=%uW grace=%umin: %s\n",
              (unsigned)(r + 1), (unsigned)st.version,
              (unsigned)st.compressor_watts, (unsigned)st.grace_min,
-             st.schedule_json.c_str());
+             new_sched.c_str());
   // The next loop() tick (<=50 ms) re-evaluates and drives the GPIO. We do NOT
   // call tick() here: apply() runs in the connectivity task, and tick() (the
   // stateful cutoff machine) is driven solely by loop() so its state is never
@@ -220,7 +236,11 @@ static bool day_in(JsonArray days, int dow) {
 // True if relay `r` has at least one usable window. An empty schedule means
 // "unconfigured" -> AC always allowed (fail-safe, never cut).
 static bool schedule_configured(uint8_t r) {
-  return s_initialised && s_r[r].schedule_json.length() > 2;
+  if (!s_initialised) return false;
+  sched_lock();
+  bool configured = s_r[r].schedule_json.length() > 2;
+  sched_unlock();
+  return configured;
 }
 
 // Returns whether AC is ALLOWED (open hours) for relay `r` at (dow, minute)
@@ -233,8 +253,18 @@ static bool schedule_configured(uint8_t r) {
 //     Tue 02:00). The selected days are the START days.
 // Multiple windows OR together.
 static bool ac_allowed(uint8_t r, int dow, int minute) {
-  StaticJsonDocument<1024> doc;
-  if (deserializeJson(doc, s_r[r].schedule_json)) return false;
+  sched_lock();
+  String sched = s_r[r].schedule_json;
+  sched_unlock();
+  StaticJsonDocument<2048> doc;
+  if (deserializeJson(doc, sched)) {
+    // Unparseable (corrupt, or too many windows for the buffer): treat as
+    // allowed, the same fail-safe as an unconfigured relay. Returning false
+    // here used to read as "off hours" and cut the AC all day.
+    static bool logged = false;
+    if (!logged) { LOG_PRINTLN("[relay] schedule unparseable — failing safe (AC allowed)"); logged = true; }
+    return true;
+  }
   JsonArray arr = doc.as<JsonArray>();
   if (arr.isNull() || arr.size() == 0) return false;
 

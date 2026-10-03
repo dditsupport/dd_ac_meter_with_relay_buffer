@@ -576,11 +576,15 @@ static void pump_stream() {
   chunk.reserve(mtu_payload + 64);
 
   storage::stream_rows_up_to(snap, [&](const storage::RowFields &r) -> bool {
+    // The 1-based channel goes LAST, as a 10th field, so an app that only knows
+    // the 9-field single-meter layout still parses the line. Without it the
+    // relayed rows reach the server channel-less and both meters' rows collide
+    // on (seq, channel 1) — one is dropped and the other filed under meter 1.
     char line[128];
     int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f\n",
+                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u\n",
                      (unsigned long long)r.seq, r.boot_id, r.sec_since_boot,
-                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz);
+                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz, (unsigned)r.channel);
     if (n <= 0) return true;
     if (chunk.length() + n > mtu_payload) {
       s_char_stream->setValue((uint8_t *)chunk.c_str(), chunk.length());

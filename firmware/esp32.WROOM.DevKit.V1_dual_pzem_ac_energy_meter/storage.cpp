@@ -196,10 +196,19 @@ bool begin() {
   }
   s_partition_total = LittleFS.totalBytes();
 
-  // Recovery step 1: delete leftover /log.tmp.
+  // Recovery step 1: leftover /log.tmp. truncate_up_to() writes and closes the
+  // complete tmp file BEFORE removing /log.csv, so a tmp with no /log.csv
+  // beside it means power was lost between that remove and the rename — the
+  // tmp holds every unsynced row and must be finished, not deleted. A tmp next
+  // to an intact /log.csv is a copy that never completed; drop it.
   if (LittleFS.exists(LOG_TMP_PATH)) {
-    LOG_PRINTLN("[storage] cleanup leftover /log.tmp");
-    LittleFS.remove(LOG_TMP_PATH);
+    if (!LittleFS.exists(LOG_PATH)) {
+      LOG_PRINTLN("[storage] finishing interrupted truncate: /log.tmp -> /log.csv");
+      LittleFS.rename(LOG_TMP_PATH, LOG_PATH);
+    } else {
+      LOG_PRINTLN("[storage] cleanup leftover /log.tmp");
+      LittleFS.remove(LOG_TMP_PATH);
+    }
   }
 
   // Recovery step 2: repair tail of /log.csv.
@@ -556,13 +565,14 @@ bool truncate_up_to(uint64_t acked_seq) {
   if (r && w) {
     String line;
     uint32_t kept = 0;
-    while (r.available()) {
+    bool write_ok = true;
+    while (r.available() && write_ok) {
       char c = (char)r.read();
       if (c == '\n') {
         RowFields rf;
         if (parse_row(line, rf) && rf.seq > acked_seq) {
           line += '\n';
-          w.write((const uint8_t *)line.c_str(), line.length());
+          write_ok = w.write((const uint8_t *)line.c_str(), line.length()) == line.length();
           kept++;
         }
         line = "";
@@ -573,10 +583,17 @@ bool truncate_up_to(uint64_t acked_seq) {
     w.flush();
     w.close();
     r.close();
-    LittleFS.remove(LOG_PATH);
-    LittleFS.rename(LOG_TMP_PATH, LOG_PATH);
-    s_unsynced_count = kept;
-    ok = true;
+    if (write_ok) {
+      LittleFS.remove(LOG_PATH);
+      LittleFS.rename(LOG_TMP_PATH, LOG_PATH);
+      s_unsynced_count = kept;
+      ok = true;
+    } else {
+      // Short write (flash full mid-copy): the tmp is missing rows, so keep the
+      // original log intact and retry on the next ack.
+      LittleFS.remove(LOG_TMP_PATH);
+      LOG_PRINTLN("[storage] truncate aborted: short write to /log.tmp");
+    }
   } else {
     if (r) r.close();
     if (w) w.close();
@@ -637,14 +654,29 @@ void factory_reset() {
   // Close our own NVS handles so the partition can be deinitialized, then erase
   // the WHOLE default NVS partition — every namespace (cfg, state, relay,
   // health) at once, which also future-proofs this against namespaces added
-  // later. After erase the device boots exactly as if freshly flashed:
-  // boot_id/seq reset, no Wi-Fi creds, default host + log interval, no relay
-  // schedule, cleared boot-loop history.
+  // later. After erase the device boots as if freshly flashed — no Wi-Fi
+  // creds, default host + log interval, no relay schedule, cleared boot-loop
+  // history — with ONE exception: boot_id and the seq high-water mark survive.
+  // The server keys readings on (device_id, seq, channel) and silently ignores
+  // a duplicate, so restarting seq at 1 would make it drop every new row until
+  // seq climbed past the pre-reset maximum (and ack them, so the device would
+  // delete them too). Carrying boot_id forward keeps the boot chain monotonic.
+  uint32_t keep_boot_id = s_boot_id;
+  uint64_t keep_seq_hwm = s_seq_hwm > s_last_seq ? s_seq_hwm : s_last_seq + 1;
   s_cfg.end();
   s_state.end();
   esp_err_t derr = nvs_flash_deinit();
   esp_err_t eerr = nvs_flash_erase();
-  LOG_PRINTF("[storage] NVS wipe: deinit=%d erase=%d\n", (int)derr, (int)eerr);
+  esp_err_t ierr = nvs_flash_init();
+  bool kept = false;
+  if (ierr == ESP_OK && s_state.begin("state", false)) {
+    kept = s_state.putUInt("boot_id", keep_boot_id) > 0 &&
+           s_state.putULong64("seq_hwm", keep_seq_hwm) > 0;
+    s_state.end();
+  }
+  LOG_PRINTF("[storage] NVS wipe: deinit=%d erase=%d init=%d, kept boot_id=%u seq_hwm=%llu: %s\n",
+             (int)derr, (int)eerr, (int)ierr, keep_boot_id,
+             (unsigned long long)keep_seq_hwm, kept ? "ok" : "FAILED");
 
   // Reformat LittleFS for a clean, consistent buffer — more robust than removing
   // individual files, which could leave a partially written file across reboot.

@@ -357,8 +357,16 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   JsonArray readings = doc.createNestedArray("readings");
   uint64_t max_in_batch = 0;
   uint32_t included = 0;
+  // Set when the batch limit falls BETWEEN the rows of one seq (one per
+  // channel). The server acks the highest seq it saw and truncate_up_to()
+  // deletes every row <= that seq, so acking a half-sent seq would silently
+  // delete the other channel's row without it ever being uploaded.
+  bool split_seq = false;
   storage::stream_rows_up_to(snapshot_seq, [&](const storage::RowFields &r) -> bool {
-    if (included >= SYNC_BATCH_SIZE) return false;
+    if (included >= SYNC_BATCH_SIZE) {
+      split_seq = (r.seq == max_in_batch);
+      return false;
+    }
     JsonObject o = readings.createNestedObject();
     o["seq"] = r.seq;
     // 1-based PZEM channel. Rows from one sampling instant share `seq` and
@@ -607,6 +615,9 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   }
   uint64_t acked = rdoc["acked_up_to_seq"] | 0;
   if (acked == 0) acked = max_in_batch;
+  // Hold back the split seq: its other row(s) go out at the head of the next
+  // batch, and the rows already sent are re-sent as harmless duplicates.
+  if (split_seq && acked >= max_in_batch) acked = max_in_batch - 1;
   out_acked_seq = acked;
   s_last_successful_post_us = time_source::monotonic_us();
 
