@@ -76,6 +76,13 @@ if ($device_id === '' || $current_bid <= 0) {
     log_ingest($device_id, 0, 0, 'missing_fields', null);
     json_response(400, ['ok' => false, 'error' => 'missing_fields']);
 }
+// Same shape claim_device.php enforces. Without it an over-long id was
+// silently truncated by the INSERT IGNORE below, then made the next insert fail
+// with an uncaught "data too long" (500).
+if (!preg_match('/^[A-Za-z0-9_\-:.]{1,32}$/', $device_id)) {
+    log_ingest(substr($device_id, 0, 32), 0, 0, 'bad_device_id', null);
+    json_response(400, ['ok' => false, 'error' => 'bad_device_id']);
+}
 
 $pdo = db();
 
