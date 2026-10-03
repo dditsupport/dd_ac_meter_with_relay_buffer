@@ -582,9 +582,10 @@ static void pump_stream() {
     // on (seq, channel 1) — one is dropped and the other filed under meter 1.
     char line[128];
     int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u\n",
+                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u,%u\n",
                      (unsigned long long)r.seq, r.boot_id, r.sec_since_boot,
-                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz, (unsigned)r.channel);
+                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz, (unsigned)r.channel,
+                     (unsigned)r.epoch);
     if (n <= 0) return true;
     if (chunk.length() + n > mtu_payload) {
       s_char_stream->setValue((uint8_t *)chunk.c_str(), chunk.length());

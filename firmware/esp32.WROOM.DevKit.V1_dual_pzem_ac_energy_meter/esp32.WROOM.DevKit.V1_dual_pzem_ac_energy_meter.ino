@@ -251,6 +251,7 @@ static void handle_serial_command(const String &cmd) {
         rf.Wh = snap.ch[ch].latest.energy_wh;
         rf.PF = snap.ch[ch].latest.pf;
         rf.Hz = snap.ch[ch].latest.frequency;
+        rf.epoch = (uint32_t)time_source::wall_time();   // 0 if clock unknown
         if (storage::append_row(rf)) wrote_any = true;
       }
       if (wrote_any) {
@@ -435,6 +436,7 @@ static void sampling_task(void *) {
           rf.Wh = sample[ch].energy_wh;
           rf.PF = sample[ch].pf;
           rf.Hz = sample[ch].frequency;
+          rf.epoch = (uint32_t)time_source::wall_time();   // 0 if clock unknown
           if (storage::append_row(rf)) wrote_any = true;
         }
         if (wrote_any) {

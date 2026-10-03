@@ -359,6 +359,10 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     o["Wh"] = r.Wh;
     o["PF"] = r.PF;
     o["Hz"] = r.Hz;
+    // Wall-clock time of the sample (UTC epoch), when the clock was known.
+    // The server prefers it for rows from earlier boots, where the uptime
+    // chain cannot account for time spent powered off.
+    if (r.epoch) o["t"] = r.epoch;
     if (r.seq > max_in_batch) max_in_batch = r.seq;
     included++;
     return true;

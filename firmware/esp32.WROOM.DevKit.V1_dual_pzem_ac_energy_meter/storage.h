@@ -25,6 +25,12 @@ struct RowFields {
   float Wh;
   float PF;
   float Hz;  // mains frequency; appended in the v2 row format
+  // Wall-clock UTC epoch when the row was sampled, from the DS1307/NTP clock;
+  // 0 = clock not known yet. Lets the server timestamp rows from an earlier
+  // boot directly instead of estimating from uptimes, which cannot see how
+  // long the power was off between boots. Optional trailing field on disk, so
+  // rows buffered by older firmware still parse (as 0).
+  uint32_t epoch = 0;
 };
 
 // Mount LittleFS, run crash recovery (delete /log.tmp, validate last line),

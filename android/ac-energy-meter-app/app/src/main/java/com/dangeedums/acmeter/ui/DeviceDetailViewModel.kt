@@ -510,6 +510,9 @@ class DeviceDetailViewModel(
                     // Trailing channel field (dual-meter firmware); single-meter
                     // firmware omits it and is always channel 1.
                     ch = parts.getOrNull(9)?.toIntOrNull()?.takeIf { it >= 1 } ?: 1,
+                    // Wall-clock epoch (newer firmware); 0 means the meter's
+                    // clock was unknown when it sampled, so send nothing.
+                    t = parts.getOrNull(10)?.toLongOrNull()?.takeIf { it > 0 },
                 )
             }
         }

@@ -31,11 +31,11 @@ static bool lock_log(TickType_t ticks = pdMS_TO_TICKS(2000)) {
 static void unlock_log() { xSemaphoreGive(s_log_mutex); }
 
 static bool parse_row(const String &line, RowFields &out) {
-  // Row format (dual-PZEM build): "seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz"
+  // Row format (dual-PZEM build): "seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz[,epoch]"
   // `ch` is the 1-based PZEM channel. One sampling instant writes one row per
-  // channel, all sharing `seq`. This build has no deployed predecessor, so
-  // there is no legacy row layout to accept — a row that does not parse to
-  // exactly 10 fields is treated as corrupt and dropped by the tail repair.
+  // channel, all sharing `seq`. The trailing wall-clock epoch is optional so
+  // rows written before it was added still parse (epoch = 0). Anything else
+  // is treated as corrupt and dropped by the tail repair.
   const char *s = line.c_str();
   char *end;
 
@@ -70,6 +70,13 @@ static bool parse_row(const String &line, RowFields &out) {
       if (*end != ',') return false;
       s = end + 1;
     }
+  }
+  out.epoch = 0;
+  if (*end == ',') {
+    s = end + 1;
+    uint32_t ep = strtoul(s, &end, 10);
+    if (end == s) return false;
+    out.epoch = ep;
   }
   return true;
 }
@@ -500,10 +507,11 @@ bool append_row(const RowFields &row) {
   if (f) {
     char line[128];
     int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f\n",
+                     "%llu,%u,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u\n",
                      (unsigned long long)row.seq, (unsigned)row.channel,
                      row.boot_id, row.sec_since_boot,
-                     row.V, row.I, row.P, row.Wh, row.PF, row.Hz);
+                     row.V, row.I, row.P, row.Wh, row.PF, row.Hz,
+                     (unsigned)row.epoch);
     if (n > 0 && n < (int)sizeof(line)) {
       size_t w = f.write((const uint8_t *)line, n);
       f.flush();

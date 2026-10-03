@@ -10,6 +10,10 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_db.php';
 
+// Same floor the firmware applies to its own clock (2023-11-14): anything
+// earlier is an unset RTC, not a real sample time.
+const MIN_PLAUSIBLE_EPOCH = 1700000000;
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_response(405, ['ok' => false, 'error' => 'method_not_allowed']);
 }
@@ -284,11 +288,33 @@ try {
         // firmware omits it, so default to channel 1.
         $ch  = (int)($r['ch'] ?? 1);
         if ($ch < 1) $ch = 1;
-        if ($seq <= 0 || $bid <= 0 || !isset($offsets[$bid])) continue;
+        // Device wall-clock time of the sample (UTC epoch), sent by firmware
+        // that stamps rows from its DS1307/NTP clock; absent or 0 when the
+        // clock was unknown at sampling time. Ignored unless plausible.
+        $t   = (int)($r['t'] ?? 0);
+        $t_ok = $t >= MIN_PLAUSIBLE_EPOCH && $t <= time() + 86400;
+        if ($seq <= 0 || $bid <= 0) continue;
 
-        $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
-        $wt_str   = date('Y-m-d H:i:s', $wt_epoch);
-        $conf     = ($bid === $current_bid) ? 'exact' : 'approx';
+        if ($bid === $current_bid && isset($offsets[$bid])) {
+            // Current boot: uptime is continuous up to sync_wall_time, so the
+            // chain is exact and immune to any error in the device clock.
+            $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
+            $conf     = 'exact';
+        } elseif ($t_ok) {
+            // Earlier boot: the chain only adds up uptimes, so it cannot see how
+            // long the unit sat powered off between boots and would place these
+            // rows late by the length of the outage. The device clock can.
+            $wt_epoch = $t;
+            $conf     = 'exact';
+        } elseif (isset($offsets[$bid])) {
+            // Earlier boot from older firmware, or sampled before the clock was
+            // known: fall back to the chain estimate.
+            $wt_epoch = $sync_epoch - (int)round($offsets[$bid]) + $sec;
+            $conf     = 'approx';
+        } else {
+            continue;
+        }
+        $wt_str = date('Y-m-d H:i:s', $wt_epoch);
 
         $ins->execute([
             $device_id,

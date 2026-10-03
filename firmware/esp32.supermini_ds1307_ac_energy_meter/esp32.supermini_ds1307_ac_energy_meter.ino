@@ -262,6 +262,8 @@ static void handle_serial_command(const String &cmd) {
       rf.P = snap.latest.power;
       rf.Wh = snap.latest.energy_wh;
       rf.PF = snap.latest.pf;
+      rf.Hz = snap.latest.frequency;
+      rf.epoch = (uint32_t)time_source::wall_time();   // 0 if clock unknown
       if (storage::append_row(rf)) {
         storage::set_last_seq(seq);
         wifi_sync::request_immediate_sync();
@@ -415,6 +417,7 @@ static void sampling_task(void *) {
         rf.Wh = sample.energy_wh;
         rf.PF = sample.pf;
         rf.Hz = sample.frequency;
+        rf.epoch = (uint32_t)time_source::wall_time();   // 0 if clock unknown
         if (storage::append_row(rf)) {
           storage::set_last_seq(seq);
           if (state_lock()) {

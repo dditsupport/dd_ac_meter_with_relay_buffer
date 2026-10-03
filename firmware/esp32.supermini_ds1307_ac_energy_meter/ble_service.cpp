@@ -538,10 +538,13 @@ static void pump_stream() {
 
   storage::stream_rows_up_to(snap, [&](const storage::RowFields &r) -> bool {
     char line[128];
+    // Fields 10 and 11 are channel (always 1 here) and the wall-clock epoch
+    // (0 = clock unknown) — the same layout the dual-meter build streams, so
+    // the app parses both identically. Older apps read only the first 9.
     int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f\n",
+                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,1,%u\n",
                      (unsigned long long)r.seq, r.boot_id, r.sec_since_boot,
-                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz);
+                     r.V, r.I, r.P, r.Wh, r.PF, r.Hz, (unsigned)r.epoch);
     if (n <= 0) return true;
     if (chunk.length() + n > mtu_payload) {
       s_char_stream->setValue((uint8_t *)chunk.c_str(), chunk.length());

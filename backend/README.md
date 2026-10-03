@@ -171,6 +171,26 @@ All require a session cookie (`meter_sess`) from POST `/api/login.php`.
 | `/admin/users.php` | admin | user CRUD |
 | `/admin/devices.php` | admin | device binding, per-device interval override, AC-cutoff config (open hours + compressor knobs) + live relay state |
 
+## Reading timestamps
+
+`ingest.php` sets each row's `wall_time` like this:
+
+1. **Current boot** — `sync_wall_time − current_boot_uptime_sec + sec`.
+   Uptime is continuous up to the sync, so this is exact (`time_confidence =
+   'exact'`) and does not depend on the device clock being right.
+2. **Earlier boot with a device timestamp** — the row's `t`, the UTC epoch
+   the firmware stamped from its DS1307/NTP clock when it sampled (`'exact'`).
+   Used only if it is after 2023-11 and no more than a day in the future.
+3. **Earlier boot without one** (older firmware, or sampled before the clock
+   was known) — the boot-chain estimate: walk back through `boot_history`
+   adding each boot's duration (`'approx'`). This cannot see time spent
+   powered off between boots, so it places such rows late by the length of
+   the outage.
+
+Rows are buffered on the device as
+`seq,[ch,]boot_id,sec,V,I,P,Wh,PF,Hz,epoch`; the trailing epoch is optional so
+rows written by older firmware still parse.
+
 ## Aggregations
 
 `readings.php?aggregate=hourly|daily|monthly` groups rows by bucket and

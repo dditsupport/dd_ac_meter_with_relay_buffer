@@ -31,8 +31,9 @@ static bool lock_log(TickType_t ticks = pdMS_TO_TICKS(2000)) {
 static void unlock_log() { xSemaphoreGive(s_log_mutex); }
 
 static bool parse_row(const String &line, RowFields &out) {
-  // v2 expected: "seq,boot_id,sec,V,I,P,Wh,PF,Hz"
-  // v1 (legacy): "seq,boot_id,sec,V,I,P,Wh,PF"   <- Hz defaults to 0
+  // v3 expected: "seq,boot_id,sec,V,I,P,Wh,PF,Hz,epoch"
+  // v2 (legacy): "seq,boot_id,sec,V,I,P,Wh,PF,Hz"  <- epoch defaults to 0
+  // v1 (legacy): "seq,boot_id,sec,V,I,P,Wh,PF"     <- Hz defaults to 0
   int parts = 0;
   const char *s = line.c_str();
   char *end;
@@ -40,6 +41,7 @@ static bool parse_row(const String &line, RowFields &out) {
   uint32_t v_u32;
   float v_f;
   out.Hz = 0.0f;  // default for legacy rows
+  out.epoch = 0;   // default for pre-v3 rows (clock time not recorded)
 
   v_u64 = strtoull(s, &end, 10);
   if (end == s || *end != ',') return false;
@@ -74,9 +76,17 @@ static bool parse_row(const String &line, RowFields &out) {
     if (end != s) {
       out.Hz = v_f;
       parts++;
+      // Optional wall-clock epoch (v3), only ever written after Hz.
+      if (*end == ',') {
+        s = end + 1;
+        uint32_t ep = strtoul(s, &end, 10);
+        if (end == s) return false;
+        out.epoch = ep;
+        parts++;
+      }
     }
   }
-  return parts == 8 || parts == 9;
+  return parts == 8 || parts == 9 || parts == 10;
 }
 
 // Strip a trailing partial line from /log.csv if it lacks newline or fails to parse.
@@ -494,9 +504,10 @@ bool append_row(const RowFields &row) {
   if (f) {
     char line[128];
     int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f\n",
+                     "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u\n",
                      (unsigned long long)row.seq, row.boot_id, row.sec_since_boot,
-                     row.V, row.I, row.P, row.Wh, row.PF, row.Hz);
+                     row.V, row.I, row.P, row.Wh, row.PF, row.Hz,
+                     (unsigned)row.epoch);
     if (n > 0 && n < (int)sizeof(line)) {
       size_t w = f.write((const uint8_t *)line, n);
       f.flush();
