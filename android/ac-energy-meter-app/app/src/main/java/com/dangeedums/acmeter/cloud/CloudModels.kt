@@ -152,12 +152,11 @@ data class IngestReading(
     val Wh: Double,
     val PF: Double,
     val Hz: Double? = null,
-    /** 1-based PZEM channel. Dual-meter firmware sends it as the 10th stream
-     *  field; without it the server files every row under channel 1. */
+    /** 1-based PZEM channel (stream field 10). */
     val ch: Int = 1,
-    /** Device wall-clock time of the sample (UTC epoch seconds), the 11th
-     *  stream field; null when the meter's clock was unknown. The server uses
-     *  it to timestamp rows from before a reboot or power cut. */
+    /** Device wall-clock time of the sample (UTC epoch seconds, stream field
+     *  11); null when the meter's clock was unknown. The server uses it to
+     *  timestamp rows from before a reboot or power cut. */
     val t: Long? = null,
 )
 

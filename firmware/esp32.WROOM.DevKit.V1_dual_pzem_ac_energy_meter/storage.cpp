@@ -35,11 +35,10 @@ static bool lock_log(TickType_t ticks = pdMS_TO_TICKS(2000)) {
 static void unlock_log() { xSemaphoreGive(s_log_mutex); }
 
 static bool parse_row(const String &line, RowFields &out) {
-  // Row format (dual-PZEM build): "seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz[,epoch]"
+  // Row format (dual-PZEM build): "seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz,epoch"
   // `ch` is the 1-based PZEM channel. One sampling instant writes one row per
-  // channel, all sharing `seq`. The trailing wall-clock epoch is optional so
-  // rows written before it was added still parse (epoch = 0). Anything else
-  // is treated as corrupt and dropped by the tail repair.
+  // channel, all sharing `seq`. A row that does not parse to exactly these 11
+  // fields is treated as corrupt and dropped by the tail repair.
   const char *s = line.c_str();
   char *end;
 
@@ -75,13 +74,11 @@ static bool parse_row(const String &line, RowFields &out) {
       s = end + 1;
     }
   }
-  out.epoch = 0;
-  if (*end == ',') {
-    s = end + 1;
-    uint32_t ep = strtoul(s, &end, 10);
-    if (end == s) return false;
-    out.epoch = ep;
-  }
+  if (*end != ',') return false;
+  s = end + 1;
+  uint32_t ep = strtoul(s, &end, 10);
+  if (end == s) return false;
+  out.epoch = ep;
   return true;
 }
 

@@ -25,12 +25,11 @@ struct RowFields {
   float P;
   float Wh;
   float PF;
-  float Hz;  // mains frequency; appended in the v2 row format
+  float Hz;  // mains frequency
   // Wall-clock UTC epoch when the row was sampled, from the DS1307/NTP clock;
   // 0 = clock not known yet. Lets the server timestamp rows from an earlier
   // boot directly instead of estimating from uptimes, which cannot see how
-  // long the power was off between boots. Optional trailing field on disk, so
-  // rows buffered by older firmware still parse (as 0).
+  // long the power was off between boots.
   uint32_t epoch = 0;
 };
 

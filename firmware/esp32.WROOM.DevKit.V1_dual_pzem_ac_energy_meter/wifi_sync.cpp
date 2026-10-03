@@ -621,14 +621,11 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  // The ingest response carries every relay's open-hours schedule TWICE: in
-  // relay_channels[] and again as the flat relay_* mirror for single-relay
-  // firmware. This build reads relay_channels, so the filter drops the flat
-  // relay_schedule copy while parsing, which roughly halves what the document
-  // has to hold. An overflowing StaticJsonDocument fails the parse OUTRIGHT —
-  // the POST then counts as failed, so the rows it delivered are never
-  // truncated and get resent forever while the buffer fills, and no config is
-  // picked up either.
+  // Relay config arrives as relay_channels[] (one entry per relay, each with a
+  // full open-hours schedule). The filter keeps only the fields this function
+  // reads. An overflowing StaticJsonDocument fails the parse OUTRIGHT — the
+  // POST then counts as failed, so the rows it delivered are never truncated
+  // and get resent forever while the buffer fills, and no config is picked up.
   //
   // Sized for the server's limit of 8 open-hours windows per relay
   // (admin_relay.php): 8 full-week windows on 2 relays measure 3,633 B on the
@@ -642,8 +639,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   if (rfilter.isNull()) {
     for (const char *k : {"ok", "acked_up_to_seq", "server_time", "log_interval_sec",
         "nightly_reboot_enable", "nightly_reboot_start_hour", "nightly_reboot_end_hour",
-        "radio_rest_interval_sec", "radio_rest_duration_sec",
-        "relay_version", "relay_compressor_watts", "relay_grace_min"}) {
+        "radio_rest_interval_sec", "radio_rest_duration_sec"}) {
       rfilter[k] = true;
     }
     rfilter["relay_channels"] = true;
@@ -709,7 +705,7 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     }
   }
 
-  // Server-pushed relay config. Preferred form is per channel:
+  // Server-pushed relay config, one entry per relay:
   //   "relay_channels": [ {ch, version, schedule[], compressor_watts, grace_min} ]
   // so each relay gets its own open-hours window and cutoff knobs. An entry
   // with an out-of-range ch is ignored. relay::apply() is a no-op when nothing
@@ -726,24 +722,6 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
                    sched_json,
                    rc["compressor_watts"] | 0,   // 0 = leave unchanged
                    rc["grace_min"]        | 0);
-    }
-  } else if (rdoc.containsKey("relay_version") && rdoc.containsKey("relay_schedule")) {
-    // (Unreachable through the filter above, which drops relay_schedule: a
-    // relay_version alone must not be applied as an empty schedule.)
-    // Legacy flat form (single-relay servers): one config for the whole device.
-    // Apply it to EVERY relay so a one-relay backend still drives this unit
-    // predictably rather than leaving relay 2 unconfigured.
-    uint32_t rv = rdoc["relay_version"] | 0;
-    String sched_json;
-    if (rdoc.containsKey("relay_schedule")) {
-      serializeJson(rdoc["relay_schedule"], sched_json);
-    } else {
-      sched_json = "[]";
-    }
-    uint32_t cw = rdoc["relay_compressor_watts"] | 0;   // 0 = leave unchanged
-    uint32_t gm = rdoc["relay_grace_min"]        | 0;   // 0 = leave unchanged
-    for (uint8_t r = 0; r < relay::count(); ++r) {
-      relay::apply(r, rv, sched_json, cw, gm);
     }
   }
 

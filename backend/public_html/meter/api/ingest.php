@@ -311,15 +311,6 @@ try {
         $t   = (int)($r['t'] ?? 0);
         $t_ok = $t >= MIN_PLAUSIBLE_EPOCH && $t <= time() + 86400;
         if ($seq <= 0 || $bid <= 0) continue;
-        // A zero-filled sample (V = 0 and Wh = 0) is what older single-meter
-        // firmware logged on a missed Modbus read; a real PZEM never reports it.
-        // Stored, it becomes a bucket's MIN(energy_wh) and blows that bar up to
-        // the whole cumulative reading, so drop it — but still count its seq so
-        // the ack covers it and the device deletes it.
-        if ((float)($r['V'] ?? 0) == 0.0 && (float)($r['Wh'] ?? 0) == 0.0) {
-            if ($seq > $max_seq) $max_seq = $seq;
-            continue;
-        }
 
         if ($bid === $current_bid && isset($offsets[$bid])) {
             // Current boot: uptime is continuous up to sync_wall_time, so the
@@ -383,9 +374,7 @@ try {
         $seq_floor = (int)$fl->fetchColumn();
         log_ingest($device_id, count($readings), 0, 'seq_collision',
                    "seq={$collision[0]} ch={$collision[1]} floor={$seq_floor}");
-        // 409, not 200: firmware without renumbering support treats any 200 as
-        // an ack and would delete the rows. On a failure it keeps them buffered
-        // until it is updated.
+        // 409, not 200: the firmware treats a 200 as an ack and truncates.
         json_response(409, ['ok' => false, 'error' => 'seq_collision', 'seq_floor' => $seq_floor]);
     }
 
@@ -431,15 +420,12 @@ foreach (maintenance_config_for_response(device_maintenance_config($pdo, $device
     $resp[$k] = $v;
 }
 
-// Attach the relay config (if any). schedule_json = AC-allowed open hours;
-// compressor_watts / grace_min tune the compressor-aware cutoff. Firmware uses
-// 'relay_version' to skip reapplying when nothing has changed. The compressor
-// columns are selected in a guarded query so a DB that hasn't run migration
-// 005 still serves the schedule.
-// A dual-PZEM unit has one relay per meter, each with its own row keyed by
-// channel, so fetch ALL of this device's rows and send them as relay_channels[].
-// The flat relay_* fields are still emitted from channel 1 so a single-relay
-// firmware keeps working unchanged.
+// Attach the relay config (if any) as relay_channels[], one entry per relay
+// row: schedule = AC-allowed open hours; compressor_watts / grace_min tune the
+// compressor-aware cutoff; the firmware uses `version` to skip reapplying when
+// nothing has changed. Single-relay firmware reads the ch 1 entry. The
+// compressor columns are selected in a guarded query so a DB that hasn't run
+// migration 005 still serves the schedule.
 $srows = [];
 try {
     $st = $pdo->prepare(
@@ -483,31 +469,7 @@ if ($srows) {
         }
         $channels[] = $entry;
     }
-    // Send each device only the form it reads. Firmware parses this response
-    // into a fixed-size buffer, and every schedule sent twice (per-channel AND
-    // the flat mirror) roughly doubled the size: on the single-relay builds'
-    // old 1 KB buffer that overflowed at a second open-hours window, failing
-    // the whole parse — the device then treated every POST as failed, resent
-    // the same rows forever and stopped picking up config. Multi-relay
-    // firmware reports relay_count > 1 and reads relay_channels[] (the flat
-    // copy is only its fallback for servers without it); single-relay firmware
-    // omits relay_count and reads only the flat fields.
-    if ($relay_count > 1) {
-        $resp['relay_channels'] = $channels;
-    } else {
-        $first = $channels[0];
-        foreach ($channels as $c) {
-            if ($c['ch'] === 1) { $first = $c; break; }
-        }
-        $resp['relay_version']  = $first['version'];
-        $resp['relay_schedule'] = $first['schedule'];
-        if (isset($first['compressor_watts'])) {
-            $resp['relay_compressor_watts'] = $first['compressor_watts'];
-        }
-        if (isset($first['grace_min'])) {
-            $resp['relay_grace_min'] = $first['grace_min'];
-        }
-    }
+    $resp['relay_channels'] = $channels;
 }
 
 json_response(200, $resp);

@@ -597,16 +597,13 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  // The ingest response carries the schedule twice: in relay_channels[] (for
-  // multi-relay firmware) and in the flat relay_schedule this build reads. The
-  // filter drops relay_channels while parsing, which roughly halves what the
-  // document has to hold. An overflowing StaticJsonDocument fails the parse
-  // OUTRIGHT — the POST then counts as failed, so the rows it delivered are
-  // never truncated and get resent forever while the buffer fills, and no
-  // config is picked up either. The old 1 KB fit exactly one full-week window.
+  // Relay config arrives as relay_channels[] (one entry here: ch 1). The
+  // filter keeps only the fields this function reads. An overflowing
+  // StaticJsonDocument fails the parse OUTRIGHT — the POST then counts as
+  // failed, so the rows it delivered are never truncated and get resent
+  // forever while the buffer fills, and no config is picked up.
   //
-  // Sized for the server's limit of 8 open-hours windows (admin_relay.php):
-  // 8 full-week windows measure 1,986 B on the 32-bit target.
+  // Sized for the server's limit of 8 open-hours windows (admin_relay.php).
   //
   // static, not a local: the connectivity task shares its stack with the
   // mbedTLS handshake (see CONN_TASK_STACK). Only this task calls post_batch(),
@@ -616,11 +613,10 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
   if (rfilter.isNull()) {
     for (const char *k : {"ok", "acked_up_to_seq", "server_time", "log_interval_sec",
         "nightly_reboot_enable", "nightly_reboot_start_hour", "nightly_reboot_end_hour",
-        "radio_rest_interval_sec", "radio_rest_duration_sec",
-        "relay_version", "relay_compressor_watts", "relay_grace_min"}) {
+        "radio_rest_interval_sec", "radio_rest_duration_sec"}) {
       rfilter[k] = true;
     }
-    rfilter["relay_schedule"] = true;
+    rfilter["relay_channels"] = true;
   }
   rdoc.clear();
   if (deserializeJson(rdoc, resp, DeserializationOption::Filter(rfilter))) {
@@ -680,21 +676,20 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     }
   }
 
-  // Optional: server-pushed relay config. The server attaches relay_version
-  // (uint), relay_schedule (AC-allowed open hours array), and the two cutoff
-  // knobs relay_compressor_watts / relay_grace_min to every ingest response.
-  // relay::apply() is a no-op when nothing changed; 0 leaves a knob unchanged.
-  if (rdoc.containsKey("relay_version")) {
-    uint32_t rv = rdoc["relay_version"] | 0;
-    String sched_json;
-    if (rdoc.containsKey("relay_schedule")) {
-      serializeJson(rdoc["relay_schedule"], sched_json);
-    } else {
-      sched_json = "[]";
+  // Server-pushed relay config: relay_channels[] with one entry per relay —
+  // {ch, version, schedule[], compressor_watts, grace_min}. This build has
+  // one relay, so only ch 1 applies. relay::apply() is a no-op when nothing
+  // changed; 0 leaves a cutoff knob unchanged.
+  if (rdoc.containsKey("relay_channels")) {
+    for (JsonObject rc : rdoc["relay_channels"].as<JsonArray>()) {
+      if ((rc["ch"] | 0) != 1) continue;
+      String sched_json;
+      if (rc.containsKey("schedule")) serializeJson(rc["schedule"], sched_json);
+      else                            sched_json = "[]";
+      relay::apply(rc["version"] | 0, sched_json,
+                   rc["compressor_watts"] | 0,   // 0 = leave unchanged
+                   rc["grace_min"]        | 0);
     }
-    uint32_t cw = rdoc["relay_compressor_watts"] | 0;   // 0 = leave unchanged
-    uint32_t gm = rdoc["relay_grace_min"]        | 0;   // 0 = leave unchanged
-    relay::apply(rv, sched_json, cw, gm);
   }
 
   // Server-time fallback: if neither the DS1307 nor NTP gave us a wall

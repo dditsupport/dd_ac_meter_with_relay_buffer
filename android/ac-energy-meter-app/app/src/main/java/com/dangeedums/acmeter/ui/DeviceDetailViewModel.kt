@@ -395,7 +395,7 @@ class DeviceDetailViewModel(
                         "bad_csrf"                   -> "Session expired. Sign out & in on the Cloud tab, then retry."
                         "device_owned_by_other_user" -> "This device is bound to a different user. Ask an admin to re-bind it."
                         "missing_fields", "invalid_json" -> "Sync payload was rejected by the server (${resp.error})."
-                        "seq_collision"              -> "Meter reading numbers clash with the server's. Update the meter firmware, then sync again."
+                        "seq_collision"              -> "Meter reading numbers still clash with the server's after renumbering. Sync again."
                         null                          -> "Server rejected the upload."
                         else                          -> "Server: ${resp.error}"
                     }
@@ -512,8 +512,9 @@ class DeviceDetailViewModel(
         text.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isEmpty() || trimmed == "END") return@forEach
+            // seq,boot_id,sec,V,I,P,Wh,PF,Hz,ch,epoch (every firmware build)
             val parts = trimmed.split(',')
-            if (parts.size < 8) return@forEach
+            if (parts.size != 11) return@forEach
             runCatching {
                 out += IngestReading(
                     seq     = parts[0].toLong(),
@@ -524,13 +525,10 @@ class DeviceDetailViewModel(
                     P  = parts[5].toDouble(),
                     Wh = parts[6].toDouble(),
                     PF = parts[7].toDouble(),
-                    Hz = parts.getOrNull(8)?.toDoubleOrNull(),
-                    // Trailing channel field (dual-meter firmware); single-meter
-                    // firmware omits it and is always channel 1.
-                    ch = parts.getOrNull(9)?.toIntOrNull()?.takeIf { it >= 1 } ?: 1,
-                    // Wall-clock epoch (newer firmware); 0 means the meter's
-                    // clock was unknown when it sampled, so send nothing.
-                    t = parts.getOrNull(10)?.toLongOrNull()?.takeIf { it > 0 },
+                    Hz = parts[8].toDouble(),
+                    ch = parts[9].toInt(),
+                    // 0 means the meter's clock was unknown when it sampled.
+                    t = parts[10].toLong().takeIf { it > 0 },
                 )
             }
         }

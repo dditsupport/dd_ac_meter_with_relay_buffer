@@ -35,62 +35,40 @@ static bool lock_log(TickType_t ticks = pdMS_TO_TICKS(2000)) {
 static void unlock_log() { xSemaphoreGive(s_log_mutex); }
 
 static bool parse_row(const String &line, RowFields &out) {
-  // v3 expected: "seq,boot_id,sec,V,I,P,Wh,PF,Hz,epoch"
-  // v2 (legacy): "seq,boot_id,sec,V,I,P,Wh,PF,Hz"  <- epoch defaults to 0
-  // v1 (legacy): "seq,boot_id,sec,V,I,P,Wh,PF"     <- Hz defaults to 0
-  int parts = 0;
+  // Row format: "seq,boot_id,sec,V,I,P,Wh,PF,Hz,epoch". A row that does not
+  // parse to exactly these 10 fields is treated as corrupt and dropped by the
+  // tail repair.
   const char *s = line.c_str();
   char *end;
-  uint64_t v_u64;
-  uint32_t v_u32;
-  float v_f;
-  out.Hz = 0.0f;  // default for legacy rows
-  out.epoch = 0;   // default for pre-v3 rows (clock time not recorded)
 
-  v_u64 = strtoull(s, &end, 10);
+  uint64_t seq = strtoull(s, &end, 10);
   if (end == s || *end != ',') return false;
-  out.seq = v_u64;
-  s = end + 1; parts++;
+  out.seq = seq;
+  s = end + 1;
 
-  v_u32 = strtoul(s, &end, 10);
+  uint32_t boot_id = strtoul(s, &end, 10);
   if (end == s || *end != ',') return false;
-  out.boot_id = v_u32;
-  s = end + 1; parts++;
+  out.boot_id = boot_id;
+  s = end + 1;
 
-  v_u32 = strtoul(s, &end, 10);
+  uint32_t sec = strtoul(s, &end, 10);
   if (end == s || *end != ',') return false;
-  out.sec_since_boot = v_u32;
-  s = end + 1; parts++;
+  out.sec_since_boot = sec;
+  s = end + 1;
 
-  float *fields[] = {&out.V, &out.I, &out.P, &out.Wh, &out.PF};
-  for (int i = 0; i < 5; ++i) {
-    v_f = strtof(s, &end);
-    if (end == s) return false;
-    *fields[i] = v_f;
-    if (i < 4) {
-      if (*end != ',') return false;
-      s = end + 1;
-    }
-    parts++;
-  }
-  // Optional Hz field (v2). If present, *end == ','; otherwise it's '\n', '\r' or '\0'.
-  if (*end == ',') {
+  // V,I,P,Wh,PF,Hz — six floats, each followed by a comma.
+  float *fields[] = {&out.V, &out.I, &out.P, &out.Wh, &out.PF, &out.Hz};
+  for (int i = 0; i < 6; ++i) {
+    float v = strtof(s, &end);
+    if (end == s || *end != ',') return false;
+    *fields[i] = v;
     s = end + 1;
-    v_f = strtof(s, &end);
-    if (end != s) {
-      out.Hz = v_f;
-      parts++;
-      // Optional wall-clock epoch (v3), only ever written after Hz.
-      if (*end == ',') {
-        s = end + 1;
-        uint32_t ep = strtoul(s, &end, 10);
-        if (end == s) return false;
-        out.epoch = ep;
-        parts++;
-      }
-    }
   }
-  return parts == 8 || parts == 9 || parts == 10;
+
+  uint32_t ep = strtoul(s, &end, 10);
+  if (end == s) return false;
+  out.epoch = ep;
+  return true;
 }
 
 // Strip a trailing partial line from /log.csv if it lacks newline or fails to parse.

@@ -586,10 +586,9 @@ static void pump_stream() {
   chunk.reserve(mtu_payload + 64);
 
   storage::stream_rows_up_to(snap, [&](const storage::RowFields &r) -> bool {
-    // The 1-based channel goes LAST, as a 10th field, so an app that only knows
-    // the 9-field single-meter layout still parses the line. Without it the
-    // relayed rows reach the server channel-less and both meters' rows collide
-    // on (seq, channel 1) — one is dropped and the other filed under meter 1.
+    // Stream layout (shared with the single-meter builds):
+    // seq,boot_id,sec,V,I,P,Wh,PF,Hz,ch,epoch — ch is the 1-based channel,
+    // epoch the wall-clock time (0 = clock unknown).
     char line[128];
     int n = snprintf(line, sizeof(line),
                      "%llu,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u,%u\n",

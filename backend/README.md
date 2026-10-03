@@ -187,9 +187,8 @@ All require a session cookie (`meter_sess`) from POST `/api/login.php`.
    powered off between boots, so it places such rows late by the length of
    the outage.
 
-Rows are buffered on the device as
-`seq,[ch,]boot_id,sec,V,I,P,Wh,PF,Hz,epoch`; the trailing epoch is optional so
-rows written by older firmware still parse.
+Rows are buffered on the device as `seq,[ch,]boot_id,sec,V,I,P,Wh,PF,Hz,epoch`
+(`ch` on the dual-meter build only); `epoch` is 0 while the clock is unknown.
 
 ## Aggregations
 
