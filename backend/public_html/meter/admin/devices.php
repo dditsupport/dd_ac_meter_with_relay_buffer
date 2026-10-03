@@ -644,7 +644,13 @@ chSel.addEventListener('change', () => {
   loadRelayChannel(parseInt(chSel.value, 10) || 1);
 });
 
+// Same cap as api/admin_relay.php: the firmware's buffers are sized for 8.
+const MAX_RELAY_WINDOWS = 8;
 document.getElementById('relay-add').addEventListener('click', () => {
+  if (rowsEl.querySelectorAll('tr').length >= MAX_RELAY_WINDOWS) {
+    alert('A relay can have at most ' + MAX_RELAY_WINDOWS + ' windows. A window can cover several days.');
+    return;
+  }
   // First window on an empty schedule gets the every-day 09:00–02:00 default;
   // extra windows start with no days ticked so they can't silently duplicate it.
   const first = rowsEl.querySelectorAll('tr').length === 0;

@@ -589,21 +589,33 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  // Must hold the WHOLE ingest response, not just the part this build reads:
-  // ok + acked_up_to_seq + server_time + log_interval_sec, plus the relay
-  // config (relay_version / relay_schedule / relay_compressor_watts /
-  // relay_grace_min). 256 B only ever fit the response of a device with NO
-  // schedule configured — one open-hours window pushes it over, and an
-  // overflowing StaticJsonDocument fails the parse OUTRIGHT, so the device
-  // would log "bad response JSON" and silently stop picking up log_interval_sec
-  // as well as its relay schedule.
+  // The ingest response carries the schedule twice: in relay_channels[] (for
+  // multi-relay firmware) and in the flat relay_schedule this build reads. The
+  // filter drops relay_channels while parsing, which roughly halves what the
+  // document has to hold. An overflowing StaticJsonDocument fails the parse
+  // OUTRIGHT — the POST then counts as failed, so the rows it delivered are
+  // never truncated and get resent forever while the buffer fills, and no
+  // config is picked up either. The old 1 KB fit exactly one full-week window.
+  //
+  // Sized for the server's limit of 8 open-hours windows (admin_relay.php):
+  // 8 full-week windows measure 1,986 B on the 32-bit target.
   //
   // static, not a local: the connectivity task shares its stack with the
   // mbedTLS handshake (see CONN_TASK_STACK). Only this task calls post_batch(),
-  // so one shared instance is safe.
-  static StaticJsonDocument<1024> rdoc;
+  // so single shared instances are safe.
+  static StaticJsonDocument<2560> rdoc;
+  static StaticJsonDocument<384> rfilter;
+  if (rfilter.isNull()) {
+    for (const char *k : {"ok", "acked_up_to_seq", "server_time", "log_interval_sec",
+        "nightly_reboot_enable", "nightly_reboot_start_hour", "nightly_reboot_end_hour",
+        "radio_rest_interval_sec", "radio_rest_duration_sec",
+        "relay_version", "relay_compressor_watts", "relay_grace_min"}) {
+      rfilter[k] = true;
+    }
+    rfilter["relay_schedule"] = true;
+  }
   rdoc.clear();
-  if (deserializeJson(rdoc, resp)) {
+  if (deserializeJson(rdoc, resp, DeserializationOption::Filter(rfilter))) {
     LOG_PRINTF("[wifi] bad response JSON: %s\n", resp.c_str());
     return false;
   }

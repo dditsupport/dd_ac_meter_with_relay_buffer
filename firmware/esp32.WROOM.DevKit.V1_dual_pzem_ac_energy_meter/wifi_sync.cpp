@@ -610,21 +610,35 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
   }
-  // Must hold the whole ingest response, including relay_channels[] — one entry
-  // per relay, each carrying a full open-hours schedule array. Sized by
-  // expression so it grows with the relay count instead of needing a manual
-  // bump: a fixed 2048 was already marginal at 2 relays with multi-window
-  // schedules and would overflow at 3. That matters because an overflowing
-  // StaticJsonDocument fails the parse OUTRIGHT — the device would log "bad
-  // response JSON" and silently stop picking up log_interval_sec AND its relay
-  // config, not just the part that didn't fit.
+  // The ingest response carries every relay's open-hours schedule TWICE: in
+  // relay_channels[] and again as the flat relay_* mirror for single-relay
+  // firmware. This build reads relay_channels, so the filter drops the flat
+  // relay_schedule copy while parsing, which roughly halves what the document
+  // has to hold. An overflowing StaticJsonDocument fails the parse OUTRIGHT —
+  // the POST then counts as failed, so the rows it delivered are never
+  // truncated and get resent forever while the buffer fills, and no config is
+  // picked up either.
   //
-  // static, not a local: at 3 relays this is ~3.3 KB, and the connectivity task
-  // shares its stack with the mbedTLS handshake (see CONN_TASK_STACK). Only
-  // this task calls post_batch(), so a single shared instance is safe.
-  static StaticJsonDocument<1024 + RELAY_COUNT * 768> rdoc;
+  // Sized for the server's limit of 8 open-hours windows per relay
+  // (admin_relay.php): 8 full-week windows on 2 relays measure 3,633 B on the
+  // 32-bit target, so this leaves ~12% headroom.
+  //
+  // static, not a local: the connectivity task shares its stack with the
+  // mbedTLS handshake (see CONN_TASK_STACK). Only this task calls post_batch(),
+  // so single shared instances are safe.
+  static StaticJsonDocument<1024 + RELAY_COUNT * 1536> rdoc;
+  static StaticJsonDocument<384> rfilter;
+  if (rfilter.isNull()) {
+    for (const char *k : {"ok", "acked_up_to_seq", "server_time", "log_interval_sec",
+        "nightly_reboot_enable", "nightly_reboot_start_hour", "nightly_reboot_end_hour",
+        "radio_rest_interval_sec", "radio_rest_duration_sec",
+        "relay_version", "relay_compressor_watts", "relay_grace_min"}) {
+      rfilter[k] = true;
+    }
+    rfilter["relay_channels"] = true;
+  }
   rdoc.clear();
-  if (deserializeJson(rdoc, resp)) {
+  if (deserializeJson(rdoc, resp, DeserializationOption::Filter(rfilter))) {
     LOG_PRINTF("[wifi] bad response JSON: %s\n", resp.c_str());
     return false;
   }
@@ -702,7 +716,9 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
                    rc["compressor_watts"] | 0,   // 0 = leave unchanged
                    rc["grace_min"]        | 0);
     }
-  } else if (rdoc.containsKey("relay_version")) {
+  } else if (rdoc.containsKey("relay_version") && rdoc.containsKey("relay_schedule")) {
+    // (Unreachable through the filter above, which drops relay_schedule: a
+    // relay_version alone must not be applied as an empty schedule.)
     // Legacy flat form (single-relay servers): one config for the whole device.
     // Apply it to EVERY relay so a one-relay backend still drives this unit
     // predictably rather than leaving relay 2 unconfigured.

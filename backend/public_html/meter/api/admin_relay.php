@@ -130,8 +130,15 @@ case 'set':
     json_response(200, ['ok' => true, 'channel' => $ch, 'version' => (int)$st->fetchColumn()]);
 
 case 'clear':
+    // Push an EMPTY schedule with a bumped version rather than deleting the row.
+    // A deleted row simply stops being sent, and the firmware keeps enforcing
+    // the schedule it cached in NVS — so "clear" never reached the device and
+    // its AC kept being cut. An empty schedule is the firmware's "unconfigured"
+    // state: AC always allowed.
     $pdo->prepare(
-        'DELETE FROM ed_device_relay_schedule WHERE device_id = ? AND channel = ?'
+        'UPDATE ed_device_relay_schedule
+            SET schedule_json = \'[]\', version = version + 1
+          WHERE device_id = ? AND channel = ?'
     )->execute([$dev, $ch]);
     json_response(200, ['ok' => true, 'channel' => $ch]);
 
@@ -151,7 +158,11 @@ function validate_schedule(string $raw): array {
     if (!is_array($doc)) {
         json_response(400, ['ok' => false, 'error' => 'schedule_not_array']);
     }
-    if (count($doc) > 16) {
+    // The firmware parses the ingest response into fixed-size buffers sized for
+    // 8 windows per relay (wifi_sync.cpp). More than that overflows them, the
+    // device then treats every POST as failed, and it stops draining its
+    // buffer and picking up config — so refuse it here.
+    if (count($doc) > 8) {
         json_response(400, ['ok' => false, 'error' => 'too_many_windows']);
     }
     $out = [];

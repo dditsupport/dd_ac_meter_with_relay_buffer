@@ -467,17 +467,30 @@ if ($srows) {
         }
         $channels[] = $entry;
     }
-    $resp['relay_channels'] = $channels;
-
-    // Back-compat: flat fields mirror channel 1 (or the first row present).
-    $first = $channels[0];
-    $resp['relay_version']  = $first['version'];
-    $resp['relay_schedule'] = $first['schedule'];
-    if (isset($first['compressor_watts'])) {
-        $resp['relay_compressor_watts'] = $first['compressor_watts'];
-    }
-    if (isset($first['grace_min'])) {
-        $resp['relay_grace_min'] = $first['grace_min'];
+    // Send each device only the form it reads. Firmware parses this response
+    // into a fixed-size buffer, and every schedule sent twice (per-channel AND
+    // the flat mirror) roughly doubled the size: on the single-relay builds'
+    // old 1 KB buffer that overflowed at a second open-hours window, failing
+    // the whole parse — the device then treated every POST as failed, resent
+    // the same rows forever and stopped picking up config. Multi-relay
+    // firmware reports relay_count > 1 and reads relay_channels[] (the flat
+    // copy is only its fallback for servers without it); single-relay firmware
+    // omits relay_count and reads only the flat fields.
+    if ($relay_count > 1) {
+        $resp['relay_channels'] = $channels;
+    } else {
+        $first = $channels[0];
+        foreach ($channels as $c) {
+            if ($c['ch'] === 1) { $first = $c; break; }
+        }
+        $resp['relay_version']  = $first['version'];
+        $resp['relay_schedule'] = $first['schedule'];
+        if (isset($first['compressor_watts'])) {
+            $resp['relay_compressor_watts'] = $first['compressor_watts'];
+        }
+        if (isset($first['grace_min'])) {
+            $resp['relay_grace_min'] = $first['grace_min'];
+        }
     }
 }
 
