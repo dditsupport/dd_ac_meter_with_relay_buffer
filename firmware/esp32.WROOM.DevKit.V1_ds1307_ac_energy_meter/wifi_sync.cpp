@@ -70,15 +70,26 @@ static void set_wifi_status(WifiStatus st) {
   }
 }
 
+// Set when new credentials are saved over BLE. The WL_CONNECTED fast path below
+// would otherwise keep reusing the OLD network forever, so a meter moved to a
+// new SSID from the app never actually switched until it lost the old one.
+static volatile bool s_reconnect_pending = false;
+void request_reconnect() { s_reconnect_pending = true; }
+
 static bool try_connect_known() {
+  bool reconnect = s_reconnect_pending;
+  s_reconnect_pending = false;
   // Already connected from a previous cycle? Reuse the link — re-scanning
   // and calling WiFi.begin() again every 2 min would otherwise force a
   // disconnect/reconnect and spam the log with the IDF's own
   // early-log noise (the bursts of high-bit bytes that locked_vprintf
   // can't catch because they're written via ets_printf).
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED && !reconnect) {
     set_wifi_status(WIFI_CONNECTED);
     return true;
+  }
+  if (reconnect && WiFi.status() == WL_CONNECTED) {
+    LOG_PRINTLN("[wifi] new credentials saved — dropping the current association");
   }
 
   storage::WifiCred creds[MAX_WIFI_CREDS];

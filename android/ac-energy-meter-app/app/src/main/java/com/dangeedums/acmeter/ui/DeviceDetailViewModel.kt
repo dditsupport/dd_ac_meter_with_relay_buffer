@@ -338,6 +338,10 @@ class DeviceDetailViewModel(
                 _ui.value = _ui.value.copy(syncStage = SyncStage.Reading, syncRows = 0,
                                             syncMessage = "Subscribing to data stream…")
                 val info  = gatt.readDeviceInfo()
+                // Uptime is read now but sync_wall_time is stamped after the
+                // stream, which can take most of a minute; carry the uptime
+                // forward by the elapsed time so current-boot rows aren't late.
+                val infoReadAt = System.nanoTime()
                 val boots = gatt.readBootHistory()
 
                 // Accumulate stream until "END\n" arrives.
@@ -366,7 +370,8 @@ class DeviceDetailViewModel(
                     fw_version             = info.fw,
                     sync_wall_time         = nowIso(),
                     current_boot_id        = info.currentBootId,
-                    current_boot_uptime_sec= info.uptimeSec,
+                    current_boot_uptime_sec= info.uptimeSec +
+                        (System.nanoTime() - infoReadAt) / 1_000_000_000L,
                     boot_history           = boots.map { IngestBoot(it.bootId, it.durationSec) },
                     readings               = rows,
                 )

@@ -41,6 +41,11 @@ data class WifiConfigUi(
  */
 class WifiConfigViewModel(private val gatt: MeterGatt) : ViewModel() {
 
+    // True once the device has reported a connect attempt for the credentials
+    // being saved. Until then a "disconnected" status is the state from BEFORE
+    // it picked them up, not a failure of them.
+    private var sawAttempt = false
+
     private val _ui = MutableStateFlow(WifiConfigUi())
     val ui: StateFlow<WifiConfigUi> = _ui.asStateFlow()
 
@@ -82,16 +87,23 @@ class WifiConfigViewModel(private val gatt: MeterGatt) : ViewModel() {
         )
         // If we were waiting on a save, turn the device's status into feedback.
         if (_ui.value.saving) {
-            val msg = when (st.status.lowercase()) {
-                "connected"  -> "Connected to ${st.ssid ?: _ui.value.selected}."
-                "connecting" -> "Connecting to ${st.ssid ?: _ui.value.selected}…"
-                "failed", "disconnected" ->
-                    "Couldn't connect${st.detail?.let { " — $it" } ?: ""}. Check the password."
-                else -> "Device status: ${st.status}"
+            val status = st.status.lowercase()
+            if (status == "connecting" || status == "scanning") sawAttempt = true
+            // "connected" counts only for the network being saved: right after
+            // the write the device can still be on its OLD network. A failure
+            // counts only after an attempt was seen.
+            val connectedToNew = status == "connected" &&
+                                 (st.ssid == null || st.ssid == _ui.value.selected.trim())
+            val failed = (status == "failed" || status == "disconnected") && sawAttempt
+            val done = connectedToNew || failed
+            val msg = when {
+                connectedToNew       -> "Connected to ${st.ssid ?: _ui.value.selected}."
+                failed               -> "Couldn't connect${st.detail?.let { " — $it" } ?: ""}. Check the password."
+                status == "connecting" -> "Connecting to ${st.ssid ?: _ui.value.selected}…"
+                status == "connected" || status == "disconnected" || status == "saved" ->
+                    "Waiting for the device to try ${_ui.value.selected.trim()}…"
+                else                 -> "Device status: ${st.status}"
             }
-            val done = st.status.equals("connected", true) ||
-                       st.status.equals("failed", true) ||
-                       st.status.equals("disconnected", true)
             _ui.value = _ui.value.copy(message = msg, saving = !done && _ui.value.saving)
         }
     }
@@ -164,6 +176,7 @@ class WifiConfigViewModel(private val gatt: MeterGatt) : ViewModel() {
             _ui.value = _ui.value.copy(message = "Enter a network name (SSID) first.")
             return
         }
+        sawAttempt = false
         _ui.value = _ui.value.copy(saving = true, message = "Sending credentials to device…")
         viewModelScope.launch {
             val json = buildString {

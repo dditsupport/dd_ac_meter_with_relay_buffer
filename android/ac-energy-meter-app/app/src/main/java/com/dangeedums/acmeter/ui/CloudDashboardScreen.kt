@@ -149,7 +149,7 @@ fun CloudDashboardScreen(vm: CloudViewModel, onSignOut: () -> Unit) {
         }
 
         // Stats
-        val periodKwh = ui.points.sumOf { it.kwh ?: 0.0 }
+        val periodKwh = ui.periodKwh ?: ui.points.sumOf { it.kwh ?: 0.0 }
         val peakW     = ui.points.maxOfOrNull { it.P_peak ?: it.P ?: 0.0 } ?: 0.0
         val nowW      = ui.points.lastOrNull()?.P ?: ui.points.lastOrNull()?.P_avg ?: 0.0
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {

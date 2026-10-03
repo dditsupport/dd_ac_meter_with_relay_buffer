@@ -92,6 +92,9 @@ data class ReadingsResponse(
     val aggregate: String? = null,
     /** Which meter these points belong to (1-based). */
     val channel: Int = 1,
+    /** The window's start->end meter difference. Summing the bucket kWh drops
+     *  the energy used between one bucket's last reading and the next's first. */
+    val total_kwh: Double? = null,
     val points: List<ReadingPoint> = emptyList(),
     val error: String? = null,
 )

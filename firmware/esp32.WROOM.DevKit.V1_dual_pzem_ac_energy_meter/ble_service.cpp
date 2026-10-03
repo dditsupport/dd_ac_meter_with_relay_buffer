@@ -507,6 +507,7 @@ class WifiCfgCallbacks : public NimBLECharacteristicCallbacks {
       s_wifi_status_json = out;
       s_char_wifi_status->setValue(to_std(s_wifi_status_json));
       s_char_wifi_status->notify();
+      wifi_sync::request_reconnect();
       wifi_sync::request_immediate_sync();
       LOG_PRINTF("[ble] wifi cred saved: %s, immediate sync requested\n", ssid.c_str());
     } else {
