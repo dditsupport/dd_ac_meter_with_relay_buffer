@@ -332,7 +332,7 @@ class DeviceDetailViewModel(
      * ingest payload, POST it to MilesWeb, then ACK the highest seq back
      * to the device so it truncates /log.csv.
      */
-    fun syncNow() {
+    fun syncNow(afterRebase: Boolean = false) {
         viewModelScope.launch {
             try {
                 _ui.value = _ui.value.copy(syncStage = SyncStage.Reading, syncRows = 0,
@@ -372,12 +372,25 @@ class DeviceDetailViewModel(
                 )
                 val resp = cloud.ingest(s.deviceToken, payload)
 
+                // The server already holds different readings under some of these
+                // seqs (the meter's counter restarted, e.g. after a full flash
+                // erase) and stored none of this upload. Have the meter renumber
+                // above the server's highest seq, then upload again — once.
+                if (!resp.ok && resp.error == "seq_collision" && resp.seq_floor > 0 && !afterRebase) {
+                    _ui.value = _ui.value.copy(syncMessage = "Renumbering readings on the meter…")
+                    gatt.writeSeqRebase(resp.seq_floor)
+                    kotlinx.coroutines.delay(1500)   // let the firmware rewrite its log
+                    syncNow(afterRebase = true)
+                    return@launch
+                }
+
                 if (!resp.ok) {
                     val msg = when (resp.error) {
                         "unauthorized"               -> "Sign in on the Cloud tab first, then try again."
                         "bad_csrf"                   -> "Session expired. Sign out & in on the Cloud tab, then retry."
                         "device_owned_by_other_user" -> "This device is bound to a different user. Ask an admin to re-bind it."
                         "missing_fields", "invalid_json" -> "Sync payload was rejected by the server (${resp.error})."
+                        "seq_collision"              -> "Meter reading numbers clash with the server's. Update the meter firmware, then sync again."
                         null                          -> "Server rejected the upload."
                         else                          -> "Server: ${resp.error}"
                     }

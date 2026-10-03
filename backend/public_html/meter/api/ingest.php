@@ -268,10 +268,20 @@ if ($sync_epoch === null) {
     $sync_epoch = time();
 }
 
-$inserted = 0;
-$max_seq  = 0;
+$inserted  = 0;
+$max_seq   = 0;
+$collision = null;   // [seq, channel] of the first seq collision, if any
 $pdo->beginTransaction();
 try {
+    // Looks up the row already stored under a key this POST collided with, to
+    // tell a harmless resend (same row, firmware retry or BLE + Wi-Fi both
+    // delivering it) from a seq COLLISION: a different reading under a reused
+    // seq. That happens when a device loses its counter (full flash erase, or
+    // a replacement board on the same device ID) and starts again at seq 1.
+    $dup = $pdo->prepare(
+        'SELECT boot_id, sec_since_boot, energy_wh FROM ed_energy_readings
+          WHERE device_id = ? AND seq = ? AND channel = ?'
+    );
     $ins = $pdo->prepare(
         'INSERT INTO ed_energy_readings
            (device_id, seq, channel, wall_time, time_confidence, boot_id, sec_since_boot,
@@ -331,8 +341,36 @@ try {
             (float)($r['PF'] ?? 0),
             isset($r['Hz']) ? (float)$r['Hz'] : null,
         ]);
-        if ($ins->rowCount() > 0) $inserted++;
+        if ($ins->rowCount() > 0) {
+            $inserted++;
+        } else {
+            $dup->execute([$device_id, $seq, $ch]);
+            $old = $dup->fetch();
+            $wh  = round((float)($r['Wh'] ?? 0), 2);
+            if ($old && ((int)$old['boot_id'] !== $bid ||
+                         (int)$old['sec_since_boot'] !== $sec ||
+                         abs((float)$old['energy_wh'] - $wh) > 1.0)) {
+                $collision = [$seq, $ch];
+                break;
+            }
+        }
         if ($seq > $max_seq) $max_seq = $seq;
+    }
+
+    if ($collision !== null) {
+        // Insert nothing from this batch: the device renumbers ALL its buffered
+        // rows above seq_floor and resends them, so anything kept from this
+        // attempt would be stored twice under two different seqs.
+        $pdo->rollBack();
+        $fl = $pdo->prepare('SELECT COALESCE(MAX(seq), 0) FROM ed_energy_readings WHERE device_id = ?');
+        $fl->execute([$device_id]);
+        $seq_floor = (int)$fl->fetchColumn();
+        log_ingest($device_id, count($readings), 0, 'seq_collision',
+                   "seq={$collision[0]} ch={$collision[1]} floor={$seq_floor}");
+        // 409, not 200: firmware without renumbering support treats any 200 as
+        // an ack and would delete the rows. On a failure it keeps them buffered
+        // until it is updated.
+        json_response(409, ['ok' => false, 'error' => 'seq_collision', 'seq_floor' => $seq_floor]);
     }
 
     $pdo->prepare(

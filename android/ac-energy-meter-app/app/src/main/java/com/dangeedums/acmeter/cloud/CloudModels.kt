@@ -165,4 +165,7 @@ data class IngestResponse(
     val server_time: String? = null,
     val log_interval_sec: Int? = null,
     val error: String? = null,
+    /** Set with error = "seq_collision": the server's highest seq for this
+     *  device. The meter renumbers its buffer above it before resending. */
+    val seq_floor: Long = 0,
 )

@@ -14,6 +14,10 @@ namespace storage {
 static Preferences s_cfg;
 static Preferences s_state;
 static SemaphoreHandle_t s_log_mutex = nullptr;
+// Held across "read last_seq -> append the row(s) -> set_last_seq" by the
+// writers, and by rebase_seq(), so a renumbering can never land in between
+// and leave a row stamped with a pre-rebase seq.
+static SemaphoreHandle_t s_seq_mutex = nullptr;
 
 static uint32_t s_boot_id = 0;
 static uint64_t s_last_seq = 0;
@@ -186,7 +190,8 @@ static void scan_prev_boot_duration(uint32_t prev_boot_id, uint32_t &max_sec) {
 
 bool begin() {
   s_log_mutex = xSemaphoreCreateMutex();
-  if (!s_log_mutex) return false;
+  s_seq_mutex = xSemaphoreCreateMutex();
+  if (!s_log_mutex || !s_seq_mutex) return false;
 
   if (!LittleFS.begin(true)) {
     // begin(true) is meant to format-on-fail, but that path can itself return
@@ -266,7 +271,13 @@ uint32_t boot_id() { return s_boot_id; }
 uint64_t last_seq() { return s_last_seq; }
 uint64_t seq_hwm() { return s_seq_hwm; }
 
+bool seq_lock(TickType_t ticks) { return xSemaphoreTake(s_seq_mutex, ticks) == pdTRUE; }
+void seq_unlock() { xSemaphoreGive(s_seq_mutex); }
+
 void set_last_seq(uint64_t seq) {
+  // Only ever forward: a seq is never reissued, and after rebase_seq() moves
+  // the counter up nothing may drag it back down.
+  if (seq <= s_last_seq) return;
   s_last_seq = seq;
   // Advance HWM only when we cross it.
   if (seq >= s_seq_hwm) {
@@ -499,6 +510,18 @@ bool is_buffer_full() {
   return s_buffer_full;
 }
 
+// Render one row in the on-disk CSV format. Returns its length, or 0 if it
+// did not fit (never a truncated line).
+static int format_row(const RowFields &row, char *line, size_t cap) {
+  int n = snprintf(line, cap,
+                   "%llu,%u,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u\n",
+                   (unsigned long long)row.seq, (unsigned)row.channel,
+                   row.boot_id, row.sec_since_boot,
+                   row.V, row.I, row.P, row.Wh, row.PF, row.Hz,
+                   (unsigned)row.epoch);
+  return (n > 0 && n < (int)cap) ? n : 0;
+}
+
 bool append_row(const RowFields &row) {
   if (is_buffer_full()) return false;
   if (!lock_log()) return false;
@@ -506,13 +529,8 @@ bool append_row(const RowFields &row) {
   File f = LittleFS.open(LOG_PATH, "a");
   if (f) {
     char line[128];
-    int n = snprintf(line, sizeof(line),
-                     "%llu,%u,%u,%u,%.2f,%.3f,%.2f,%.2f,%.3f,%.2f,%u\n",
-                     (unsigned long long)row.seq, (unsigned)row.channel,
-                     row.boot_id, row.sec_since_boot,
-                     row.V, row.I, row.P, row.Wh, row.PF, row.Hz,
-                     (unsigned)row.epoch);
-    if (n > 0 && n < (int)sizeof(line)) {
+    int n = format_row(row, line, sizeof(line));
+    if (n > 0) {
       size_t w = f.write((const uint8_t *)line, n);
       f.flush();
       f.close();
@@ -607,6 +625,80 @@ bool truncate_up_to(uint64_t acked_seq) {
     if (w) w.close();
   }
   unlock_log();
+  return ok;
+}
+
+bool rebase_seq(uint64_t seq_floor) {
+  if (!seq_lock(pdMS_TO_TICKS(5000))) return false;
+  if (!lock_log()) { seq_unlock(); return false; }
+
+  // One uniform shift for the whole buffer, chosen so the lowest buffered seq
+  // lands just above the server's highest. Uniform keeps the rows of one
+  // sampling instant (one per channel) on a shared seq and keeps file order
+  // ascending, which acking and truncation rely on.
+  uint64_t min_seq = UINT64_MAX;
+  stream_rows_up_to(UINT64_MAX, [&](const RowFields &r) -> bool {
+    if (r.seq < min_seq) min_seq = r.seq;
+    return true;
+  });
+  uint64_t offset = 0;
+  bool ok = true;
+  if (min_seq != UINT64_MAX && min_seq <= seq_floor) {
+    offset = seq_floor + 1 - min_seq;
+    File r = LittleFS.open(LOG_PATH, "r");
+    File w = LittleFS.open(LOG_TMP_PATH, "w");
+    if (r && w) {
+      String line;
+      bool write_ok = true;
+      while (r.available() && write_ok) {
+        char c = (char)r.read();
+        if (c == '\n') {
+          RowFields rf;
+          if (parse_row(line, rf)) {
+            rf.seq += offset;
+            char buf[128];
+            int n = format_row(rf, buf, sizeof(buf));
+            if (n > 0) write_ok = w.write((const uint8_t *)buf, n) == (size_t)n;
+          }
+          line = "";
+        } else if (c != '\r') {
+          line += c;
+        }
+      }
+      w.flush();
+      w.close();
+      r.close();
+      if (write_ok) {
+        // Same remove-then-rename as truncate_up_to(); begin() finishes it if
+        // power is lost in between.
+        LittleFS.remove(LOG_PATH);
+        LittleFS.rename(LOG_TMP_PATH, LOG_PATH);
+      } else {
+        LittleFS.remove(LOG_TMP_PATH);
+        ok = false;
+      }
+    } else {
+      if (r) r.close();
+      if (w) w.close();
+      ok = false;
+    }
+  }
+  if (ok) {
+    // New rows continue above both the renumbered buffer and the server's
+    // floor, and the NVS high-water mark follows so a reboot cannot fall back.
+    uint64_t next_last = s_last_seq + offset;
+    if (next_last < seq_floor) next_last = seq_floor;
+    s_last_seq = next_last;
+    if (s_last_seq >= s_seq_hwm) {
+      s_seq_hwm = s_last_seq + SEQ_HWM_STRIDE;
+      s_state.putULong64("seq_hwm", s_seq_hwm);
+    }
+  }
+  unlock_log();
+  seq_unlock();
+  LOG_PRINTF("[storage] seq rebase above %llu: shift +%llu, last_seq=%llu (%s)\n",
+             (unsigned long long)seq_floor, (unsigned long long)offset,
+             (unsigned long long)s_last_seq, ok ? "ok" : "FAILED");
   return ok;
 }
 

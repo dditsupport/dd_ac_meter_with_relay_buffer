@@ -274,6 +274,15 @@ class AckCallbacks : public NimBLECharacteristicCallbacks {
     if (!is_authed(info)) return;
     std::string v = c->getValue();
     if (v.empty()) return;
+    // "rebase:<floor>" — the app relayed rows and the server answered with a
+    // seq collision (see storage::rebase_seq). Renumber instead of acking.
+    if (v.rfind("rebase:", 0) == 0) {
+      uint64_t floor_seq = strtoull(v.c_str() + 7, nullptr, 10);
+      if (storage::rebase_seq(floor_seq)) {
+        LOG_PRINTF("[ble] buffer renumbered above seq=%llu\n", (unsigned long long)floor_seq);
+      }
+      return;
+    }
     uint64_t acked = strtoull(v.c_str(), nullptr, 10);
     if (acked == 0) {
       LOG_PRINTF("[ble] ack bad value: %s\n", v.c_str());

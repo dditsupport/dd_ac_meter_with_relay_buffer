@@ -107,6 +107,12 @@ class MeterGatt(
         peripheral.write(SYNC_ACK_CHAR, seq.toString().toByteArray(), WriteType.WithResponse)
     }
 
+    /** Ask the meter to renumber its buffered rows above [floor] (the server
+     *  reported a seq collision). Same characteristic as the ack. */
+    suspend fun writeSeqRebase(floor: Long) {
+        peripheral.write(SYNC_ACK_CHAR, "rebase:$floor".toByteArray(), WriteType.WithResponse)
+    }
+
     /** Last-known Wi-Fi status. Returns null if char is empty / unparseable. */
     suspend fun readWifiStatus(): WifiStatus? = runCatching {
         val text = peripheral.read(WIFI_STATUS_CHAR).decodeToString()

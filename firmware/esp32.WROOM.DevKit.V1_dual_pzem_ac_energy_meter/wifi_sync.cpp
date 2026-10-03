@@ -591,6 +591,21 @@ static bool post_batch(uint64_t snapshot_seq, uint64_t &out_acked_seq) {
 #endif
   }
 
+  if (code == 409) {
+    // Seq collision: the server already holds different readings under some of
+    // these seqs (this unit's counter restarted, e.g. after a full flash erase).
+    // It stored nothing from this batch; renumber the buffer above its highest
+    // seq and resend straight away.
+    StaticJsonDocument<192> cdoc;
+    if (!deserializeJson(cdoc, resp) &&
+        strcmp(cdoc["error"] | "", "seq_collision") == 0) {
+      uint64_t floor_seq = cdoc["seq_floor"] | (uint64_t)0;
+      LOG_PRINTF("[wifi] server reports seq collision, floor=%llu — renumbering buffer\n",
+                 (unsigned long long)floor_seq);
+      if (storage::rebase_seq(floor_seq)) request_immediate_sync();
+      return false;
+    }
+  }
   if (code != 200) {
     LOG_PRINTF("[wifi] POST failed: code=%d body=%s\n", code, resp.c_str());
     return false;
