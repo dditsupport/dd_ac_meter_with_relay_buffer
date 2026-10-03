@@ -50,7 +50,12 @@ if (!in_array($aggregate, ['raw', '5min', 'hourly', 'daily', 'monthly'], true)) 
     json_response(400, ['ok' => false, 'error' => 'bad_aggregate']);
 }
 
-[$from_str, $to_str] = resolve_range($aggregate, $from, $to);
+try {
+    [$from_str, $to_str] = resolve_range($aggregate, $from, $to);
+} catch (Throwable $e) {
+    // DateTimeImmutable throws on an unparseable from/to.
+    json_response(400, ['ok' => false, 'error' => 'bad_date']);
+}
 
 $pdo  = db();
 $meta = $pdo->prepare(
