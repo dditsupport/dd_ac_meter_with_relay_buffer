@@ -375,7 +375,12 @@ static void sampling_task(void *) {
     if ((uint64_t)(now_us - last_log_us) >= (uint64_t)log_period_sec * 1000000ULL &&
         storage::seq_lock(pdMS_TO_TICKS(200))) {
       last_log_us = now_us;
-      if (ok || st == PZEM_OK) {
+      // Only a fresh read is logged. `sample` is zero-initialised every loop and
+      // classify() still reports PZEM_OK for the first few failed reads, so the
+      // old `ok || st == PZEM_OK` logged V=0 / Wh=0 rows on a missed Modbus
+      // transaction — and a 0 Wh row becomes the bucket MIN on the server,
+      // turning that hour's or day's bar into the whole cumulative reading.
+      if (ok) {
         uint64_t seq = storage::last_seq() + 1;
         storage::RowFields rf;
         rf.seq = seq;

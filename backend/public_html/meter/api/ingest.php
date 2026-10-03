@@ -304,6 +304,15 @@ try {
         $t   = (int)($r['t'] ?? 0);
         $t_ok = $t >= MIN_PLAUSIBLE_EPOCH && $t <= time() + 86400;
         if ($seq <= 0 || $bid <= 0) continue;
+        // A zero-filled sample (V = 0 and Wh = 0) is what older single-meter
+        // firmware logged on a missed Modbus read; a real PZEM never reports it.
+        // Stored, it becomes a bucket's MIN(energy_wh) and blows that bar up to
+        // the whole cumulative reading, so drop it — but still count its seq so
+        // the ack covers it and the device deletes it.
+        if ((float)($r['V'] ?? 0) == 0.0 && (float)($r['Wh'] ?? 0) == 0.0) {
+            if ($seq > $max_seq) $max_seq = $seq;
+            continue;
+        }
 
         if ($bid === $current_bid && isset($offsets[$bid])) {
             // Current boot: uptime is continuous up to sync_wall_time, so the

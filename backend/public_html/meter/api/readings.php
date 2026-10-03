@@ -18,6 +18,13 @@ require_once __DIR__ . '/_db.php';
 // past the ceiling instead of reading a huge negative delta.
 const PZEM_WH_ROLLOVER = 9999990.0;
 
+// Excludes the junk rows older single-meter firmware logged on a missed Modbus
+// read: a zero-filled sample (V = 0, Wh = 0). A real PZEM never reports that —
+// without mains it does not answer at all — but one such row becomes the
+// window's MIN(energy_wh) and inflates the bucket to the whole cumulative
+// reading. ingest.php no longer stores them; this covers rows already stored.
+const VALID_ROW_SQL = 'AND NOT (voltage = 0 AND energy_wh = 0)';
+
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_response(405, ['ok' => false, 'error' => 'method_not_allowed']);
 }
@@ -79,13 +86,13 @@ $points = match ($aggregate) {
 $rt = $pdo->prepare(
     'SELECT MIN(energy_wh) AS mn, MAX(energy_wh) AS mx,
             (SELECT energy_wh FROM ed_energy_readings
-               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
+               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . '
                ORDER BY wall_time ASC, id ASC LIMIT 1) AS fst,
             (SELECT energy_wh FROM ed_energy_readings
-               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
+               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . '
                ORDER BY wall_time DESC, id DESC LIMIT 1) AS lst
        FROM ed_energy_readings
-      WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?'
+      WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . ''
 );
 $rt->execute([$device_id, $channel, $from_str, $to_str,
               $device_id, $channel, $from_str, $to_str,
@@ -117,7 +124,7 @@ if ($row === false || $row['fst'] === null || $row['lst'] === null) {
 // Served by idx_device_ch_time (device_id, channel, wall_time) as an index seek.
 $og = $pdo->prepare(
     'SELECT energy_wh FROM ed_energy_readings
-      WHERE device_id = ? AND channel = ?
+      WHERE device_id = ? AND channel = ? ' . VALID_ROW_SQL . '
       ORDER BY wall_time ASC, id ASC LIMIT 1'
 );
 $og->execute([$device_id, $channel]);
@@ -132,7 +139,7 @@ $origin_kwh = ($origin_wh === false || $origin_wh === null)
 // Same index seek as the origin query, from the other end.
 $lt = $pdo->prepare(
     'SELECT energy_wh FROM ed_energy_readings
-      WHERE device_id = ? AND channel = ?
+      WHERE device_id = ? AND channel = ? ' . VALID_ROW_SQL . '
       ORDER BY wall_time DESC, id DESC LIMIT 1'
 );
 $lt->execute([$device_id, $channel]);
@@ -187,7 +194,7 @@ function fetch_raw(string $device, int $channel, string $from, string $to): arra
         'SELECT wall_time, voltage, current_a, power_w, energy_wh, power_factor,
                 frequency_hz, time_confidence
            FROM ed_energy_readings
-          WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
+          WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . '
           ORDER BY wall_time ASC
           LIMIT 5000'
     );
@@ -221,7 +228,7 @@ function fetch_bucketed(string $device, int $channel, string $from, string $to,
                 COUNT(*)            AS samples,
                 SUM(time_confidence='approx') AS approx_count
            FROM ed_energy_readings
-          WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ?
+          WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? " . VALID_ROW_SQL . "
           GROUP BY bucket
           ORDER BY bucket ASC
           LIMIT 5000"
