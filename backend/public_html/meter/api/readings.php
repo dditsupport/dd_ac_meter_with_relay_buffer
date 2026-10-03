@@ -2,21 +2,18 @@
 // GET /api/readings.php?device_id=X&channel=N&from=ISO&to=ISO&aggregate=raw|hourly|daily|monthly
 // Auth: session (browser/app). Returns JSON.
 //
-// aggregate=daily / monthly compute generated kWh as MAX(energy_wh)-MIN(energy_wh)
-// per bucket — works because the PZEM Wh counter is monotonically increasing
-// across resets (and the firmware logs PZEM resets if they happen).
+// Every energy figure here is computed from energy_cum_wh, the per-channel
+// counter that only moves forward by energy actually used (see
+// energy_delta_wh() in _db.php). The PZEM's raw register is not continuous —
+// it wraps at 9999.99 kWh, drops on an energy reset or a module swap — so
+// MAX-MIN over the raw value spiked or lost energy across any of those.
 //
-// `origin_kwh` is this channel's first-ever cumulative reading; the dashboard
+// `origin_kwh` is this channel's first-ever counter value; the dashboard
 // subtracts it so a chart that continues from the replaced meter starts at the
 // admin-entered "Old kWh" exactly. See the comment where it is computed.
 
 declare(strict_types=1);
 require_once __DIR__ . '/_db.php';
-
-// The PZEM-004T energy register counts in Wh and wraps back to 0 when it passes
-// 9999.99 kWh (= 9,999,990 Wh). Differencing across that wrap must add the span
-// past the ceiling instead of reading a huge negative delta.
-const PZEM_WH_ROLLOVER = 9999990.0;
 
 // Excludes the junk rows older single-meter firmware logged on a missed Modbus
 // read: a zero-filled sample (V = 0, Wh = 0). A real PZEM never reports that —
@@ -82,55 +79,30 @@ $points = match ($aggregate) {
     'monthly' => fetch_bucketed($device_id, $channel, $from_str, $to_str, "DATE_FORMAT(wall_time, '%Y-%m-01 00:00:00')", true),
 };
 
-// Whole-range energy total, in kWh. Normally the PZEM Wh register climbs
-// monotonically, so this is just last-first (== MAX-MIN). If it went backwards
-// over the window the register either WRAPPED past its 9999.99 kWh ceiling
-// (peak MAX near the ceiling) or was RESET to 0 (the fresh-install BOOT
-// long-press). Handle each so a wrap/reset doesn't explode the total to
-// ~10,000 kWh or show a bogus negative. NULL when the range has no readings.
+// Whole-range energy total, in kWh: the counter's rise across the window.
+// NULL when the range has no readings.
 $rt = $pdo->prepare(
-    'SELECT MIN(energy_wh) AS mn, MAX(energy_wh) AS mx,
-            (SELECT energy_wh FROM ed_energy_readings
-               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . '
-               ORDER BY wall_time ASC, id ASC LIMIT 1) AS fst,
-            (SELECT energy_wh FROM ed_energy_readings
-               WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . '
-               ORDER BY wall_time DESC, id DESC LIMIT 1) AS lst
+    'SELECT MIN(energy_cum_wh) AS mn, MAX(energy_cum_wh) AS mx
        FROM ed_energy_readings
-      WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL . ''
+      WHERE device_id = ? AND channel = ? AND wall_time BETWEEN ? AND ? ' . VALID_ROW_SQL
 );
-$rt->execute([$device_id, $channel, $from_str, $to_str,
-              $device_id, $channel, $from_str, $to_str,
-              $device_id, $channel, $from_str, $to_str]);
+$rt->execute([$device_id, $channel, $from_str, $to_str]);
 $row = $rt->fetch();
-if ($row === false || $row['fst'] === null || $row['lst'] === null) {
-    $total_kwh = null;
-} else {
-    $fst = (float)$row['fst']; $lst = (float)$row['lst'];
-    $mn  = (float)$row['mn'];  $mx  = (float)$row['mx'];
-    if ($lst >= $fst) {
-        $total_wh = $mx - $mn;                         // monotonic over the window
-    } elseif ($mx >= PZEM_WH_ROLLOVER * 0.99) {
-        $total_wh = ($mx - $fst) + $lst;               // wrapped past the ceiling
-    } else {
-        $total_wh = $lst;                              // reset to 0 -> post-reset only
-    }
-    $total_kwh = round(max(0.0, $total_wh) / 1000.0, 3);
-}
+$total_kwh = ($row === false || $row['mn'] === null)
+    ? null
+    : round(max(0.0, (float)$row['mx'] - (float)$row['mn']) / 1000.0, 3);
 
-// The device's first-ever reading on this channel, in kWh. A PZEM counter is
-// rarely at exactly zero when a unit goes into service — bench testing or a
+// The channel's first-ever counter value, in kWh. A PZEM counter is rarely at
+// exactly zero when a unit goes into service — bench testing or a
 // pre-commissioning run leaves a few hundred Wh on it — so "old meter reading +
-// raw counter" starts that much ABOVE the figure the admin typed in. Handing
-// the origin to the client lets it anchor the series, so the first reading this
+// counter" starts that much ABOVE the figure the admin typed in. Handing the
+// origin to the client lets it anchor the series, so the first reading this
 // device ever logged lines up exactly with the replaced meter's final reading.
-// Deliberately the earliest row by time, not MIN(energy_wh): after a counter
-// reset MIN would be the post-reset zero rather than the value at install.
-// Served by idx_device_ch_time (device_id, channel, wall_time) as an index seek.
+// Served by idx_device_ch_seq as an index seek.
 $og = $pdo->prepare(
-    'SELECT energy_wh FROM ed_energy_readings
+    'SELECT energy_cum_wh FROM ed_energy_readings
       WHERE device_id = ? AND channel = ? ' . VALID_ROW_SQL . '
-      ORDER BY wall_time ASC, id ASC LIMIT 1'
+      ORDER BY seq ASC LIMIT 1'
 );
 $og->execute([$device_id, $channel]);
 $origin_wh  = $og->fetchColumn();
@@ -138,14 +110,13 @@ $origin_kwh = ($origin_wh === false || $origin_wh === null)
     ? null
     : round((float)$origin_wh / 1000.0, 3);
 
-// The channel's most recent cumulative reading, in kWh, regardless of the
-// requested window — the dashboard's "Meter reading" card shows where the
-// counter stands now even when the device hasn't posted in a while.
-// Same index seek as the origin query, from the other end.
+// The channel's latest counter value, in kWh, regardless of the requested
+// window — the dashboard's "Meter reading" card shows where the meter stands
+// now even when the device hasn't posted in a while. Same index, other end.
 $lt = $pdo->prepare(
-    'SELECT energy_wh FROM ed_energy_readings
+    'SELECT energy_cum_wh FROM ed_energy_readings
       WHERE device_id = ? AND channel = ? ' . VALID_ROW_SQL . '
-      ORDER BY wall_time DESC, id DESC LIMIT 1'
+      ORDER BY seq DESC LIMIT 1'
 );
 $lt->execute([$device_id, $channel]);
 $latest_wh  = $lt->fetchColumn();
@@ -218,15 +189,15 @@ function fetch_raw(string $device, int $channel, string $from, string $to): arra
 
 function fetch_bucketed(string $device, int $channel, string $from, string $to,
                        string $bucketExpr, bool $spanToNext = false): array {
-    // Per-bucket: max-min of PZEM cumulative Wh = energy generated in bucket.
+    // Per-bucket: max-min of the continuous counter = energy used in the bucket.
     // Plus avg/peak power for context. $bucketExpr is a server-side constant
     // (never user input), so it is safe to interpolate into the SQL text.
     $st = db()->prepare(
         "SELECT $bucketExpr        AS bucket,
                 MIN(wall_time)      AS bucket_start,
                 MAX(wall_time)      AS bucket_end,
-                MIN(energy_wh)      AS wh_min,
-                MAX(energy_wh)      AS wh_max,
+                MIN(energy_cum_wh)  AS wh_min,
+                MAX(energy_cum_wh)  AS wh_max,
                 AVG(power_w)        AS p_avg,
                 MAX(power_w)        AS p_peak,
                 AVG(voltage)        AS v_avg,
@@ -251,7 +222,7 @@ function fetch_bucketed(string $device, int $channel, string $from, string $to,
         // buckets sum exactly to the range's start->end total. The last bucket
         // has no "next", so it keeps its own max-min to absorb the tail up to
         // the latest reading.
-        // Cumulative PZEM meter reading (kWh) at the start and end of this
+        // Continuous counter (kWh) at the start and end of this
         // bucket. Start = the bucket's first reading (wh_min). End = the NEXT
         // bucket's first reading in span-to-next mode (so end-start equals the
         // telescoping bar value and the gap between buckets is included), or
@@ -259,7 +230,7 @@ function fetch_bucketed(string $device, int $channel, string $from, string $to,
         // the non-span aggregates. Shown under each bar on the dashboard.
         $wh_start = (float)$r['wh_min'];
         if ($spanToNext && $i < $n - 1) {
-            $kwh = wh_span_kwh($wh_start, (float)$rows[$i + 1]['wh_min']);
+            $kwh = max(0.0, ((float)$rows[$i + 1]['wh_min'] - $wh_start) / 1000.0);
             $wh_end = (float)$rows[$i + 1]['wh_min'];
         } else {
             $kwh = max(0.0, ((float)$r['wh_max'] - $wh_start) / 1000.0);
@@ -284,20 +255,4 @@ function fetch_bucketed(string $device, int $channel, string $from, string $to,
 function format_iso(string $datetime): string {
     return (new DateTimeImmutable($datetime, new DateTimeZone(APP_TIMEZONE)))
         ->format('c');
-}
-
-// Energy consumed between two cumulative Wh register readings, in kWh. A drop
-// (curr < prev) means the register either wrapped past its 9999.99 kWh ceiling
-// or was reset to 0. When prev is near the ceiling treat it as a wrap and add
-// the span past it; a drop from a value not near the ceiling is a meter reset
-// (fresh-install BOOT long-press), counted as no consumption so it never
-// inflates a bucket's total.
-function wh_span_kwh(float $prev, float $curr): float {
-    $d = $curr - $prev;
-    if ($d < 0) {
-        $d = $prev >= PZEM_WH_ROLLOVER * 0.99
-             ? (PZEM_WH_ROLLOVER - $prev) + $curr   // wrapped past the ceiling
-             : 0.0;                                 // reset / anomaly
-    }
-    return max(0.0, $d) / 1000.0;
 }

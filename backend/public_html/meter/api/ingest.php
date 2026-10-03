@@ -289,11 +289,20 @@ try {
         'SELECT boot_id, sec_since_boot, energy_wh FROM ed_energy_readings
           WHERE device_id = ? AND seq = ? AND channel = ?'
     );
+    // The channel's previous reading by seq, for the continuous counter (see
+    // energy_delta_wh() in _db.php). Rows inserted earlier in this batch are
+    // visible here: same connection, same transaction. Served by
+    // idx_device_ch_seq.
+    $pred = $pdo->prepare(
+        'SELECT energy_wh, energy_cum_wh, wall_time FROM ed_energy_readings
+          WHERE device_id = ? AND channel = ? AND seq < ?
+          ORDER BY seq DESC LIMIT 1'
+    );
     $ins = $pdo->prepare(
         'INSERT INTO ed_energy_readings
            (device_id, seq, channel, wall_time, time_confidence, boot_id, sec_since_boot,
-            voltage, current_a, power_w, energy_wh, power_factor, frequency_hz)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            voltage, current_a, power_w, energy_wh, energy_cum_wh, power_factor, frequency_hz)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE id = id'
     );
     foreach ($readings as $r) {
@@ -333,6 +342,18 @@ try {
         }
         $wt_str = date('Y-m-d H:i:s', $wt_epoch);
 
+        // Continuous counter: the previous reading's value plus the energy used
+        // since it. The first reading of a channel starts at its raw value.
+        $wh = round((float)($r['Wh'] ?? 0), 2);
+        $pred->execute([$device_id, $ch, $seq]);
+        $p = $pred->fetch();
+        if ($p) {
+            $dt  = $wt_epoch - (int)strtotime($p['wall_time']);
+            $cum = (float)$p['energy_cum_wh'] + energy_delta_wh((float)$p['energy_wh'], $wh, $dt);
+        } else {
+            $cum = $wh;
+        }
+
         $ins->execute([
             $device_id,
             $seq,
@@ -344,7 +365,8 @@ try {
             (float)($r['V']  ?? 0),
             (float)($r['I']  ?? 0),
             (float)($r['P']  ?? 0),
-            (float)($r['Wh'] ?? 0),
+            $wh,
+            round($cum, 2),
             (float)($r['PF'] ?? 0),
             isset($r['Hz']) ? (float)$r['Hz'] : null,
         ]);
@@ -353,7 +375,6 @@ try {
         } else {
             $dup->execute([$device_id, $seq, $ch]);
             $old = $dup->fetch();
-            $wh  = round((float)($r['Wh'] ?? 0), 2);
             if ($old && ((int)$old['boot_id'] !== $bid ||
                          (int)$old['sec_since_boot'] !== $sec ||
                          abs((float)$old['energy_wh'] - $wh) > 1.0)) {

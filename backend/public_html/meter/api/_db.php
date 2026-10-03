@@ -204,6 +204,45 @@ function maintenance_config_for_response(array $cfg): array {
     return $cfg;
 }
 
+/* ---------- Continuous energy counter ----------
+ * The PZEM's own Wh register is not continuous: it wraps to 0 past 9999.99 kWh,
+ * drops to ~0 on an energy reset (BOOT long-press / app), and jumps to whatever
+ * a replacement module holds when one is swapped in. Every reading therefore
+ * also stores energy_cum_wh, a per-(device, channel) counter that only ever
+ * moves forward by the energy actually used, and every energy figure is
+ * computed from it. Migration 015 applies the same rules to stored rows in SQL
+ * — keep the two in step.
+ */
+// The PZEM-004T energy register wraps back to 0 after 9999.99 kWh.
+const PZEM_WH_ROLLOVER = 9999990.0;
+// Highest draw a PZEM-004T (100 A, 260 V max) can measure. A counter step that
+// would need more than this over the time since the previous reading cannot be
+// real consumption: a replacement module that already had energy on it.
+const MAX_PLAUSIBLE_W = 26000.0;
+// Floor for the gap used in that check, so two readings seconds apart still
+// leave room for a legitimate step.
+const MIN_PLAUSIBLE_GAP_SEC = 300;
+
+/**
+ * Energy (Wh) used between two consecutive raw PZEM readings of one channel,
+ * $dt_sec apart. Normal step: the difference. Wrap past the register ceiling:
+ * the span across it. Drop to a lower value (energy reset, or a fresh module
+ * fitted) or an implausible jump (a used module fitted): 0, and counting
+ * resumes from the new value — only the energy between the last old and first
+ * new reading is lost.
+ */
+function energy_delta_wh(float $prev_wh, float $cur_wh, int $dt_sec): float {
+    $limit = MAX_PLAUSIBLE_W * max($dt_sec, MIN_PLAUSIBLE_GAP_SEC) / 3600.0;
+    if ($cur_wh >= $prev_wh) {
+        $d = $cur_wh - $prev_wh;
+    } elseif ($prev_wh >= PZEM_WH_ROLLOVER * 0.99) {
+        $d = (PZEM_WH_ROLLOVER - $prev_wh) + $cur_wh;
+    } else {
+        return 0.0;
+    }
+    return $d > $limit ? 0.0 : $d;
+}
+
 /* ---------- PDO singleton ---------- */
 function db(): PDO {
     static $pdo = null;

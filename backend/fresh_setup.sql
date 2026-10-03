@@ -164,6 +164,10 @@ CREATE TABLE IF NOT EXISTS ed_energy_readings (
   current_a       DECIMAL(8,3)   NOT NULL,
   power_w         DECIMAL(10,2)  NOT NULL,
   energy_wh       DECIMAL(14,2)  NOT NULL,
+  -- Continuous per-(device, channel) counter: only moves forward by energy
+  -- actually used, across register wraps, energy resets and module swaps.
+  -- All energy figures are computed from it. See energy_delta_wh() in _db.php.
+  energy_cum_wh   DECIMAL(16,2)  NULL,
   power_factor    DECIMAL(4,3)   NOT NULL,
   frequency_hz    DECIMAL(5,2)   NULL,
   ingested_at     TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -173,6 +177,7 @@ CREATE TABLE IF NOT EXISTS ed_energy_readings (
   UNIQUE KEY uq_device_seq_ch  (device_id, seq, channel),
   KEY idx_device_time          (device_id, wall_time),
   KEY idx_device_ch_time       (device_id, channel, wall_time),
+  KEY idx_device_ch_seq        (device_id, channel, seq),
   KEY idx_device_date_energy   (device_id, wall_time, energy_wh),
   FOREIGN KEY (device_id) REFERENCES ed_energy_devices(device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
