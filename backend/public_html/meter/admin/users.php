@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../api/_db.php';
+require_once __DIR__ . '/../api/_ui.php';
 $me  = require_admin();
 $pdo = db();
 
@@ -13,14 +14,16 @@ $rows = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — users</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
+<meta name="theme-color" content="#f6fbf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101510" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=9">
 </head><body>
 <header class="topbar">
-  <div class="brand">AC Energy Meter — admin</div>
+  <div class="brand"><span class="logo"><?= ui_icon('shield') ?></span>Admin <small>users</small></div>
   <div class="user">
-    <a href="/admin/">overview</a>
-    &middot; <a href="/admin/devices.php">devices</a>
-    &middot; <a href="/api/logout.php">sign out</a>
+    <a href="/admin/"><?= ui_icon('shield') ?>Overview</a>
+    <a href="/admin/devices.php"><?= ui_icon('device') ?>Devices</a>
+    <a href="/api/logout.php"><?= ui_icon('logout') ?>Sign out</a>
   </div>
 </header>
 <main class="container">

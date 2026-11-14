@@ -48,7 +48,9 @@ function create_first_admin(PDO $pdo, string $u, #[\SensitiveParameter] string $
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — first-run setup</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
+<meta name="theme-color" content="#f6fbf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101510" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=9">
 </head><body class="auth">
 <form method="post" class="card login">
   <h1>First-run setup</h1>
