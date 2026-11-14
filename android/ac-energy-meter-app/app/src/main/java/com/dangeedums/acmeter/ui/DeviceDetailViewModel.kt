@@ -12,6 +12,7 @@ import com.dangeedums.acmeter.ble.DeviceInfoBle
 import com.dangeedums.acmeter.ble.MeterGatt
 import com.dangeedums.acmeter.ble.peripheralForAddress
 import com.dangeedums.acmeter.cloud.CloudClient
+import com.dangeedums.acmeter.cloud.CloudSignIn
 import com.dangeedums.acmeter.cloud.IngestBoot
 import com.dangeedums.acmeter.cloud.IngestPayload
 import com.dangeedums.acmeter.cloud.IngestReading
@@ -75,6 +76,8 @@ class DeviceDetailViewModel(
     private val blePinStore: BlePinStore,
     private val unlockRegistry: BleUnlockRegistry,
     private val deviceStore: com.dangeedums.acmeter.data.DeviceStore,
+    /** Renews an expired cloud session (saved "Remember me" sign-in) before an upload. */
+    private val signIn: CloudSignIn,
 ) : AndroidViewModel(application) {
 
     private val peripheral = peripheralForAddress(address)
@@ -365,6 +368,27 @@ class DeviceDetailViewModel(
                 }
 
                 val s = session.settings.first()
+                // Relayed rows upload with the signed-in session (no device token
+                // on the phone). Make sure it is alive — renewing it with the
+                // saved sign-in if the server expired it — before the POST, so a
+                // sync after a long idle doesn't fail with "sign in first".
+                if (s.deviceToken.isBlank()) {
+                    when (signIn.ensureSignedIn()) {
+                        CloudSignIn.Status.SignedIn -> Unit
+                        CloudSignIn.Status.NeedsSignIn -> {
+                            _ui.value = _ui.value.copy(syncStage = SyncStage.Failed,
+                                syncMessage = "Cloud session expired. Sign in on the Cloud tab " +
+                                    "(tick Remember me), then sync again. Nothing was removed from the meter.")
+                            return@launch
+                        }
+                        CloudSignIn.Status.Unreachable -> {
+                            _ui.value = _ui.value.copy(syncStage = SyncStage.Failed,
+                                syncMessage = "Can't reach the server. Check the phone's internet " +
+                                    "and sync again. Nothing was removed from the meter.")
+                            return@launch
+                        }
+                    }
+                }
                 val payload = IngestPayload(
                     device_id              = info.deviceId,
                     fw_version             = info.fw,
@@ -375,7 +399,14 @@ class DeviceDetailViewModel(
                     boot_history           = boots.map { IngestBoot(it.bootId, it.durationSec) },
                     readings               = rows,
                 )
-                val resp = cloud.ingest(s.deviceToken, payload)
+                var resp = cloud.ingest(s.deviceToken, payload)
+                // Session died between the check above and the POST (or the CSRF
+                // token went stale): renew once and upload again. Safe to repeat —
+                // nothing was stored, and the meter is only ACKed after success.
+                if (!resp.ok && s.deviceToken.isBlank() && CloudSignIn.isSessionError(resp.error) &&
+                    signIn.renew() == CloudSignIn.Status.SignedIn) {
+                    resp = cloud.ingest(s.deviceToken, payload)
+                }
 
                 // The server already holds different readings under some of these
                 // seqs (the meter's counter restarted, e.g. after a full flash
@@ -552,6 +583,7 @@ class DeviceDetailViewModel(
                     app.cloudClient, app.cloudSessionStore,
                     app.blePinStore, app.bleUnlockRegistry,
                     app.deviceStore,
+                    app.cloudSignIn,
                 )
             }
         }
