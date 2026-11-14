@@ -16,6 +16,7 @@
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <esp_wifi.h>        // esp_wifi_set_country_code, wifi_ap_record_t
 #include "log_serial.h"
 
 // TODO: HMAC payload signing as a future hardening step. For v1, the only auth
@@ -51,11 +52,61 @@ static uint32_t s_low_heap_cycles = 0;
 static uint32_t s_heap_prev_cycle_end = 0;
 #endif
 
-// Last STA disconnect reason code, captured from the Wi-Fi event so the connect
-// failure log can say *why* it failed. Common codes: 15 =
-// 4WAY_HANDSHAKE_TIMEOUT (wrong password), 2 = AUTH_EXPIRE, 201 = NO_AP_FOUND,
-// 205 = CONNECTION_FAIL. 0 = none captured yet.
+// Last STA disconnect reason code (wifi_err_reason_t), captured from the Wi-Fi
+// event so the connect-failure log can say *why* it failed. 0 = none captured
+// yet. disc_reason_text() below turns the common ones into words:
+//     2 AUTH_EXPIRE        auth frames lost — usually supply sag / weak RF
+//    15 4WAY_HS_TIMEOUT    WPA handshake never finished — almost always a wrong
+//                          password (or a WPA3-only AP the STA won't do)
+//   201 NO_AP_FOUND        SSID not heard on any allowed channel — out of range,
+//                          hidden/asleep hotspot, or (before WIFI_COUNTRY_CODE)
+//                          a router sitting on channel 12/13
+//   202 AUTH_FAIL          AP rejected authentication (MAC filter, full AP, SAE)
+//   204 HANDSHAKE_TIMEOUT  same family as 15, reported by newer IDF builds
+//   205 CONNECTION_FAIL    association attempt failed (AP busy / band steering)
+//   210 NO_AP_COMPAT_SEC   AP found but no security mode in common with the STA
+//   211 NO_AP_AUTHMODE     AP found but weaker than WIFI_MIN_AUTH
 static volatile uint8_t s_last_disc_reason = 0;
+
+static const char *disc_reason_text(uint8_t r) {
+  switch (r) {
+    case 0:   return "none";
+    case 2:   return "AUTH_EXPIRE";
+    case 15:  return "4WAY_HS_TIMEOUT (wrong password?)";
+    case 201: return "NO_AP_FOUND";
+    case 202: return "AUTH_FAIL";
+    case 204: return "HANDSHAKE_TIMEOUT (wrong password?)";
+    case 205: return "CONNECTION_FAIL";
+    case 210: return "NO_AP_COMPAT_SECURITY";
+    case 211: return "NO_AP_AUTHMODE_THRESHOLD";
+    default:  return "other";
+  }
+}
+
+// Station policy, applied right after EVERY entry into STA mode. Both settings
+// live in the Wi-Fi driver, and WiFi.mode(WIFI_OFF) — reached via radio_off()
+// and via the WiFi.disconnect(true, true) teardown after a failed attempt —
+// de-initialises the driver and drops them, so a one-time call in begin() would
+// silently stop applying after the first failure.
+//
+// Country code: the IDF default ("01", world-safe) only scans channels 12/13
+// passively and will not associate on them reliably. Jio AirFiber / Airtel
+// Xstream routers run auto-channel and regularly land on 12 or 13, which then
+// looks exactly like "AP not found" (reason 201). India permits 1-13, so set it
+// explicitly; ieee80211d=true still lets the AP's own country IE refine it.
+//
+// Min security: Arduino core 3.x defaults the auth threshold to WPA2-PSK. These
+// routers and many phone hotspots advertise WPA/WPA2 or WPA2/WPA3 transition
+// mode; lowering the floor to WPA-PSK lets the driver match every such AP
+// while it still negotiates the strongest mode both sides support (CCMP/WPA2,
+// or SAE when the AP offers it).
+static void apply_sta_policy() {
+  esp_err_t err = esp_wifi_set_country_code(WIFI_COUNTRY_CODE, true);
+  if (err != ESP_OK) {
+    LOG_PRINTF("[wifi] set country %s failed (err=%d)\n", WIFI_COUNTRY_CODE, (int)err);
+  }
+  WiFi.setMinSecurity(WIFI_MIN_AUTH);
+}
 
 static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
@@ -75,6 +126,11 @@ static void set_wifi_status(WifiStatus st) {
 // new SSID from the app never actually switched until it lost the old one.
 static volatile bool s_reconnect_pending = false;
 void request_reconnect() { s_reconnect_pending = true; }
+
+// Saved networks whose PINNED attempt failed last cycle on a build without the
+// same-cycle unpinned retry (WIFI_PIN_RETRY_SAME_CYCLE 0): the next cycle
+// connects to them unpinned once, so a stale BSSID can never strand the device.
+static bool s_unpin_next[MAX_WIFI_CREDS] = {};
 
 static bool try_connect_known() {
   bool reconnect = s_reconnect_pending;
@@ -114,78 +170,143 @@ static bool try_connect_known() {
   // config", so the fresh credentials never apply and it never associates.
   // (Background auto-reconnect — the usual source of that stuck state — is
   // disabled in begin(), so we drive every connect from a clean, idle STA.)
+  // A failed attempt (here or in run_cycle()) ends in WiFi.disconnect(true, true),
+  // which powers the STA off. WiFi.begin()/scanNetworks() would re-enable it
+  // implicitly — but without the country code / auth floor — so re-enter STA
+  // explicitly first. No-op when already in STA mode.
+  WiFi.mode(WIFI_STA);
+  apply_sta_policy();
   WiFi.disconnect(false, false);
   delay(200);
 
-  // Report the target AP's signal level as this device sees it. Informational
-  // only — we always attempt the connect below, so a scan miss (a weak AP is
-  // occasionally dropped from a scan) or a hidden SSID never blocks it.
+  // Diagnostic scan. Still never gates the connect — a scan miss (a weak AP is
+  // occasionally dropped from a scan, a phone hotspot sleeps with no client) or
+  // a hidden SSID must not stop the attempt below. It now also picks the
+  // strongest BSSID for each saved SSID: a dual-band mesh router (Jio AirFiber,
+  // Airtel Xstream) beacons the same SSID from several radios/nodes, and an
+  // unpinned begin() can lock onto a weak or band-steered one and fail to
+  // associate. Every match is logged so the console shows the full picture.
+  //
+  // BSSID + channel are COPIED out here: they live in the scan result buffer
+  // that scanDelete() frees. Fixed-size arrays (no heap) on the connect path.
+  // Records are read via getScanInfoByIndex() (raw wifi_ap_record_t) instead of
+  // WiFi.SSID(j) so the per-AP compare allocates no String.
+  uint8_t pin_bssid[MAX_WIFI_CREDS][6];
+  int32_t pin_chan[MAX_WIFI_CREDS];
+  int     pin_rssi[MAX_WIFI_CREDS];
+  for (size_t i = 0; i < n; ++i) { pin_chan[i] = 0; pin_rssi[i] = -128; }
   int found = WiFi.scanNetworks(false, true, false, 300);
-  for (size_t i = 0; i < n; ++i) {
-    bool seen = false;
-    for (int j = 0; j < found; ++j) {
-      if (WiFi.SSID(j) == creds[i].ssid) {
-        LOG_PRINTF("[wifi] \"%s\" seen at %d dBm (ch %d)\n",
-                      creds[i].ssid.c_str(), (int)WiFi.RSSI(j), WiFi.channel(j));
-        seen = true;
-        break;
+  for (int j = 0; j < found; ++j) {
+    const wifi_ap_record_t *ap =
+        (const wifi_ap_record_t *)WiFi.getScanInfoByIndex(j);
+    if (!ap) continue;
+    for (size_t i = 0; i < n; ++i) {
+      if (strcmp((const char *)ap->ssid, creds[i].ssid.c_str()) != 0) continue;
+      LOG_PRINTF("[wifi] \"%s\" %02X:%02X:%02X:%02X:%02X:%02X ch %d %d dBm auth=%d\n",
+                    creds[i].ssid.c_str(),
+                    ap->bssid[0], ap->bssid[1], ap->bssid[2],
+                    ap->bssid[3], ap->bssid[4], ap->bssid[5],
+                    (int)ap->primary, (int)ap->rssi, (int)ap->authmode);
+      if (ap->rssi > pin_rssi[i]) {
+        memcpy(pin_bssid[i], ap->bssid, 6);
+        pin_chan[i] = ap->primary;
+        pin_rssi[i] = ap->rssi;
       }
     }
-    if (!seen) {
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (pin_chan[i] == 0) {
       LOG_PRINTF("[wifi] \"%s\" not seen in scan (hidden or out of range)\n",
                     creds[i].ssid.c_str());
     }
   }
   if (found > 0) WiFi.scanDelete();
 
-  // Connect by calling WiFi.begin() directly for each stored network — a SINGLE
-  // attempt per cycle. The dual-core WROOM has no BLE/Wi-Fi coexistence problem,
-  // but a single attempt per cycle is still the right shape: the natural
-  // WIFI_SCAN_INTERVAL_SEC cycle provides the retry cadence instead. We also do
-  // NOT gate on the scan above: the IDF connection manager finds the AP's
-  // channel itself, which also covers hidden SSIDs.
+  // Connect with WiFi.begin() for each stored network. When the scan saw the
+  // SSID, the attempt is pinned to the strongest BSSID + channel; otherwise it
+  // is the plain WiFi.begin(ssid, pass) the hidden / asleep-hotspot path has
+  // always used (the IDF connection manager then finds the AP itself).
+  //
+  // A pinned attempt can fail on a stale BSSID (mesh node rebooted, AP roamed
+  // to another channel), so with WIFI_PIN_RETRY_SAME_CYCLE (1 on the dual-core
+  // WROOM, which has no BLE/Wi-Fi coexistence problem) one unpinned retry runs
+  // in the same cycle before giving up. Each attempt gets its own
+  // WIFI_CONNECT_TIMEOUT_MS. Beyond that the natural WIFI_SCAN_INTERVAL_SEC
+  // cycle provides the retry cadence.
   bool connected = false;
   for (size_t i = 0; i < n && !connected; ++i) {
-    set_wifi_status(WIFI_CONNECTING);
-    // Print the exact SSID and password being used so the credential in NVS can
-    // be verified against the router. (Diagnostic: the password is echoed in
-    // clear text on the serial console.)
-    LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" ...\n",
-                  creds[i].ssid.c_str(), creds[i].password.c_str());
-    s_last_disc_reason = 0;
-    WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
-    // Apply TX power immediately after begin(). The WROOM DevKit is externally
-    // regulated and has a proper antenna, so it runs at FULL power by default
-    // (WIFI_TX_POWER_QDBM = 78 = 19.5 dBm) — unlike the Super Mini, which has to
-    // be throttled to keep its weak LDO from sagging mid-TX-burst. The value is
-    // still runtime-settable over BLE, so it can be trimmed if a particular
-    // install proves marginal. This MUST be reapplied after every begin(): the
-    // driver resets TX power on mode changes / reconnect, so a one-time call in
-    // setup() silently drifts back to max on the first reconnect.
-    WiFi.setTxPower((wifi_power_t)storage::wifi_tx_power_qdbm());
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED &&
-           millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
-      esp_task_wdt_reset();  // this 15 s wait alone can approach the task WDT
-      delay(200);
+    const bool have_pin = pin_chan[i] > 0 && !s_unpin_next[i];
+    s_unpin_next[i] = false;
+    const int attempts = (have_pin && WIFI_PIN_RETRY_SAME_CYCLE) ? 2 : 1;
+    for (int a = 0; a < attempts && !connected; ++a) {
+      const bool pinned = have_pin && a == 0;
+      if (a > 0) {
+        // Same-cycle unpinned retry: back to a clean, idle STA without powering
+        // it down (WIFI_OFF would drop the country code) — see the note above
+        // the scan.
+        LOG_PRINTF("[wifi] \"%s\" retrying unpinned\n", creds[i].ssid.c_str());
+        WiFi.disconnect(false, false);
+        delay(200);
+      }
+      set_wifi_status(WIFI_CONNECTING);
+      // Print the exact SSID and password being used so the credential in NVS
+      // can be verified against the router. (Diagnostic: the password is echoed
+      // in clear text on the serial console.)
+      if (pinned) {
+        LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" "
+                   "(pinned %02X:%02X:%02X:%02X:%02X:%02X ch %d) ...\n",
+                      creds[i].ssid.c_str(), creds[i].password.c_str(),
+                      pin_bssid[i][0], pin_bssid[i][1], pin_bssid[i][2],
+                      pin_bssid[i][3], pin_bssid[i][4], pin_bssid[i][5],
+                      (int)pin_chan[i]);
+      } else {
+        LOG_PRINTF("[wifi] connecting to \"%s\" with password \"%s\" ...\n",
+                      creds[i].ssid.c_str(), creds[i].password.c_str());
+      }
+      s_last_disc_reason = 0;
+      if (pinned) {
+        WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str(),
+                   pin_chan[i], pin_bssid[i]);
+      } else {
+        WiFi.begin(creds[i].ssid.c_str(), creds[i].password.c_str());
+      }
+      // Apply TX power immediately after begin(). The WROOM DevKit is externally
+      // regulated and has a proper antenna, so it runs at FULL power by default
+      // (WIFI_TX_POWER_QDBM = 78 = 19.5 dBm) — unlike the Super Mini, which has to
+      // be throttled to keep its weak LDO from sagging mid-TX-burst. The value is
+      // still runtime-settable over BLE, so it can be trimmed if a particular
+      // install proves marginal. This MUST be reapplied after every begin(): the
+      // driver resets TX power on mode changes / reconnect, so a one-time call in
+      // setup() silently drifts back to max on the first reconnect.
+      WiFi.setTxPower((wifi_power_t)storage::wifi_tx_power_qdbm());
+      uint32_t start = millis();
+      while (WiFi.status() != WL_CONNECTED &&
+             millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+        esp_task_wdt_reset();  // this 15 s wait alone can approach the task WDT
+        delay(200);
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        set_wifi_status(WIFI_CONNECTED);
+        LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm, ch %d\n",
+                      creds[i].ssid.c_str(),
+                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
+                      (int)WiFi.channel());
+        connected = true;
+        break;
+      }
+      // Report the terminal status AND the STA disconnect reason so the console
+      // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
+      // AP-not-found (reason 201 = NO_AP_FOUND) from an auth expiry (reason 2,
+      // typically a supply/RF problem). status is the Arduino
+      // wl_status_t (6 = WL_DISCONNECTED).
+      LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d %s%s)\n",
+                    creds[i].ssid.c_str(), (int)WiFi.status(),
+                    (int)s_last_disc_reason, disc_reason_text(s_last_disc_reason),
+                    pinned ? ", pinned" : "");
+      // No same-cycle retry on this build: go unpinned next cycle instead.
+      if (pinned && attempts == 1) s_unpin_next[i] = true;
     }
-    if (WiFi.status() == WL_CONNECTED) {
-      set_wifi_status(WIFI_CONNECTED);
-      LOG_PRINTF("[wifi] connected to %s, ip=%s, rssi=%d dBm\n",
-                    creds[i].ssid.c_str(),
-                    WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-      connected = true;
-      break;
-    }
-    // Report the terminal status AND the STA disconnect reason so the console
-    // distinguishes a wrong password (reason 15 = 4WAY_HANDSHAKE_TIMEOUT) from
-    // AP-not-found (reason 201 = NO_AP_FOUND) from an auth expiry (reason 2,
-    // typically a supply/RF problem). status is the Arduino
-    // wl_status_t (6 = WL_DISCONNECTED).
-    LOG_PRINTF("[wifi] \"%s\" did not connect (status=%d, reason=%d)\n",
-                  creds[i].ssid.c_str(), (int)WiFi.status(),
-                  (int)s_last_disc_reason);
-    WiFi.disconnect(true, true);
+    if (!connected) WiFi.disconnect(true, true);
   }
 
   return connected;
@@ -724,6 +845,7 @@ uint32_t seconds_since_last_successful_post() {
 
 void begin() {
   WiFi.mode(WIFI_STA);
+  apply_sta_policy();   // country code + auth floor — see the helper
   // Drive every (re)connect ourselves from run_cycle()/try_connect_known()
   // instead of letting the IDF auto-reconnect in the background. On the
   // the auto-reconnect handler fires a fresh esp_wifi_connect()
@@ -761,6 +883,7 @@ void radio_off() {
 
 void radio_on() {
   WiFi.mode(WIFI_STA);
+  apply_sta_policy();   // WIFI_OFF dropped it — see the helper
   WiFi.setAutoReconnect(false);   // see begin() — we drive reconnects ourselves
   WiFi.persistent(false);
 }
@@ -785,6 +908,10 @@ uint32_t scan_results_version() { return s_scan_version; }
 void run_scan() {
   s_radio_busy = true;
   set_wifi_status(WIFI_SCANNING);
+  // scanNetworks() would re-enable a powered-down STA by itself, but without the
+  // country code — and then the app's list would miss a router on ch 12/13.
+  WiFi.mode(WIFI_STA);
+  apply_sta_policy();
   // scanNetworks(async=false, show_hidden=false, passive=false, max_ms_per_chan=300)
   int n = WiFi.scanNetworks(false, false, false, 300);
   StaticJsonDocument<2048> doc;
@@ -810,6 +937,17 @@ void run_scan() {
     o["s"] = WiFi.SSID(idx[i]);
     o["r"] = WiFi.RSSI(idx[i]);
     o["e"] = (WiFi.encryptionType(idx[i]) != WIFI_AUTH_OPEN) ? 1 : 0;
+    // Added for router troubleshooting; the app ignores unknown keys.
+    // c = primary channel, a = raw wifi_auth_mode_t (3 = WPA2, 7 = WPA2/WPA3).
+    o["c"] = WiFi.channel(idx[i]);
+    o["a"] = (int)WiFi.encryptionType(idx[i]);
+    // A characteristic value over 512 B is rejected by NimBLE, and the two new
+    // fields make 12 long SSIDs exceed that. Drop the weakest tail instead.
+    if (measureJson(doc) > SCAN_JSON_MAX_BYTES) {
+      arr.remove(arr.size() - 1);
+      emit = i;
+      break;
+    }
   }
   WiFi.scanDelete();
   String out;
