@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../api/_db.php';
+require_once __DIR__ . '/../api/_ui.php';
 $user = require_login();
 $pdo  = db();
 
@@ -56,22 +57,15 @@ $month_ist = date('Y-m');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — reports</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
+<meta name="theme-color" content="#f6fbf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101510" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=9">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script src="/dashboard/assets/theme.js?v=1"></script>
 <style>
   .report-controls .month-pick { display: none; }
   .report-controls .month-pick.show { display: flex; }
-  .report-controls input[type=month] {
-    padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px;
-  }
-  #report-empty { color: var(--muted); padding: 2rem 0; text-align: center; }
-  .report-summary { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-top: 0.85rem; }
-  .report-summary .day-total { display: inline-flex; align-items: center; gap: 0.4rem;
-    font-size: 0.85rem; }
-  .report-summary .dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; flex: none; }
-  .report-summary .day-total b { font-variant-numeric: tabular-nums; }
-  .report-summary .day-total .unit { color: var(--muted); }
-  .report-summary .grand { font-weight: 600; }
+  #report-empty { color: var(--on-surface-variant); padding: 2rem 0; text-align: center; }
   @media (max-width: 640px) {
     .report-controls .month-pick.show { width: 100%; }
     .report-controls input[type=month] { width: 100%; }
@@ -80,13 +74,14 @@ $month_ist = date('Y-m');
 </head><body>
 
 <header class="topbar">
-  <div class="brand">AC Energy Meter — reports</div>
+  <div class="brand"><span class="logo"><?= ui_icon('chart') ?></span>Reports</div>
   <div class="user">
-    <a href="/dashboard/">dashboard</a>
+    <span class="who">Signed in as <b><?= h($user['username']) ?></b></span>
+    <a href="/dashboard/<?= $selected ? '?device_id=' . urlencode($selected) : '' ?>"><?= ui_icon('home') ?>Dashboard</a>
     <?php if (!empty($user['is_admin'])): ?>
-      &middot; <a href="/admin/">admin</a>
+      <a href="/admin/"><?= ui_icon('shield') ?>Admin</a>
     <?php endif; ?>
-    &middot; <a href="/api/logout.php">sign out</a>
+    <a href="/api/logout.php"><?= ui_icon('logout') ?>Sign out</a>
   </div>
 </header>
 
@@ -113,7 +108,7 @@ $month_ist = date('Y-m');
     <label id="channel-wrap" hidden>Meter
       <select id="channel-select"></select>
     </label>
-    <div class="range-buttons">
+    <div class="range-buttons" role="group" aria-label="Report">
       <button type="button" data-mode="weekly" class="on">Weekly</button>
       <button type="button" data-mode="monthly">Monthly</button>
     </div>
@@ -123,11 +118,21 @@ $month_ist = date('Y-m');
     </label>
   </div>
 
+  <!-- Period total + one chip per day, above the chart. -->
+  <section class="card" id="totals-card" hidden>
+    <div class="totals-head">
+      <h2 class="sec"><span class="badge tint-primary"><?= ui_icon('bolt') ?></span><span class="t">Total</span></h2>
+      <div class="grand-total"><b id="grand-total">—</b> <i>kWh</i></div>
+    </div>
+    <p class="muted">Each chip is that day's start&rarr;end meter difference, in its line's colour. Chips sum to the Total.</p>
+    <div class="day-chips" id="report-summary"></div>
+  </section>
+
   <section class="card">
-    <h2 id="report-title">Weekly — hourly kWh by day</h2>
+    <h2 class="sec"><span class="badge tint-tertiary"><?= ui_icon('chart') ?></span>
+      <span class="t" id="report-title">Weekly — hourly kWh by day</span><span class="cap">kWh / hour</span></h2>
     <p class="muted" id="report-sub">Each line is one day; compare the hour-by-hour kWh across days.</p>
-    <div class="chart-wrap tall"><canvas id="report-chart"></canvas></div>
-    <div id="report-summary" class="report-summary"></div>
+    <div class="chart-box"><canvas id="report-chart"></canvas></div>
     <div id="report-empty" hidden>No readings in this range.</div>
   </section>
 </main>
@@ -176,8 +181,10 @@ function dayLabel(ymd) {           // "2026-06-24" -> "24-Jun"
   const [y, m, d] = ymd.split('-').map(Number);
   return pad(d) + '-' + MONTHS[m - 1];
 }
-function colorFor(i, n) {          // evenly-spaced hues, distinct per day
-  return `hsl(${Math.round((i * 360) / Math.max(1, n))}, 65%, 50%)`;
+function colorFor(i, n) {          // evenly-spaced hues, distinct per day; lighter on dark
+  const hue  = Math.round((i * 360) / Math.max(1, n));
+  const dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+  return dark ? `hsl(${hue}, 70%, 68%)` : `hsl(${hue}, 65%, 42%)`;
 }
 
 // Day-wise totals below the chart: colour dot + day + that day's total kWh,
@@ -194,8 +201,10 @@ function colorFor(i, n) {          // evenly-spaced hues, distinct per day
 // MAX-MIN over the range), so it matches the dashboard exactly and equals the
 // sum of the per-day chips. Falls back to the per-day sum when unavailable.
 function renderSummary(days, byDay, dayTotals, rangeTotal) {
-  const el = document.getElementById('report-summary');
+  const el   = document.getElementById('report-summary');
+  const card = document.getElementById('totals-card');
   el.innerHTML = '';
+  card.hidden = !days.length;
   if (!days.length) return;
   const dayTotal = day => dayTotals.has(day)
     ? dayTotals.get(day)
@@ -203,23 +212,18 @@ function renderSummary(days, byDay, dayTotals, rangeTotal) {
   days.forEach((day, i) => {
     const total = dayTotal(day);
     const chip = document.createElement('span');
-    chip.className = 'day-total';
+    chip.className = 'day-chip';
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.background = colorFor(i, days.length);
-    const txt = document.createElement('span');
-    txt.innerHTML = `${dayLabel(day)}: <b>${total.toFixed(2)}</b> <span class="unit">kWh</span>`;
     chip.appendChild(dot);
-    chip.appendChild(txt);
+    chip.insertAdjacentHTML('beforeend', `<b>${dayLabel(day)}</b> ${total.toFixed(2)}`);
     el.appendChild(chip);
   });
   const grand = (typeof rangeTotal === 'number')
     ? rangeTotal
     : days.reduce((a, day) => a + dayTotal(day), 0);
-  const tot = document.createElement('span');
-  tot.className = 'day-total grand';
-  tot.innerHTML = `Total: <b>${grand.toFixed(2)}</b> <span class="unit">kWh</span>`;
-  el.appendChild(tot);
+  document.getElementById('grand-total').textContent = grand.toFixed(2);
 }
 
 let mode = 'weekly';
@@ -328,11 +332,12 @@ async function load() {
     return;
   }
   wrap.hidden = false;
+  MeterTheme.applyChartDefaults();
   chart = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: { datasets },
     options: {
-      // Height comes from the .chart-wrap parent (see style.css) so the chart
+      // Height comes from the .chart-box parent (see style.css) so the chart
       // doesn't collapse to a short strip on a phone.
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'nearest', intersect: false },
@@ -342,13 +347,14 @@ async function load() {
           // isn't clipped against the right edge.
           type: 'linear', min: 0, max: 24,
           title: { display: true, text: 'Hour of day (IST)' },
+          grid: { display: false }, border: { display: false },
           // 25 hour labels overprint each other on a phone. Keep the hourly
           // grid but let Chart.js thin the labels to what actually fits.
           ticks: { stepSize: 1, autoSkip: true, maxRotation: 0,
                    maxTicksLimit: narrowScreen() ? 7 : 13,
                    callback: v => pad(v) + ':00' },
         },
-        y: { beginAtZero: true, title: { display: true, text: 'kWh' } },
+        y: { beginAtZero: true, border: { display: false }, title: { display: true, text: 'kWh' } },
       },
       plugins: {
         // The day/colour/total summary below the chart serves as the legend.
@@ -402,6 +408,8 @@ document.getElementById('month-input').addEventListener('change', () => {
 
 syncChannelPicker();
 load();
+// Line colours and chart text follow the light / dark theme.
+MeterTheme.onSchemeChange(load);
 </script>
 <?php endif; ?>
 </body></html>

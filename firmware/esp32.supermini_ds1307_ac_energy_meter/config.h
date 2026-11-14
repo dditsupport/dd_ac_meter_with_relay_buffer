@@ -67,6 +67,21 @@
 // day for its second try either.
 #define NTP_RETRY_INTERVAL_SEC  900       // 15 min — after a failed attempt
 #define WIFI_CONNECT_TIMEOUT_MS 15000
+
+// Station policy, applied after every entry into STA mode (wifi_sync.cpp,
+// apply_sta_policy()). Country "IN" allows channels 1-13 with active scan —
+// Jio AirFiber / Airtel Xstream auto-channel often picks 12 or 13, which the
+// IDF's world-safe default only scans passively. WPA_PSK is the lowest auth
+// mode the STA will accept; it does not force WPA — the strongest mode both
+// sides support (WPA2-CCMP / WPA3-SAE) is still negotiated. It only lets
+// WPA/WPA2 and WPA2/WPA3 transition-mode APs through the threshold check.
+#define WIFI_COUNTRY_CODE       "IN"
+#define WIFI_MIN_AUTH           WIFI_AUTH_WPA_PSK
+// When a connect pinned to the scanned BSSID+channel fails, retry once unpinned
+// in the same cycle (1) or on the next cycle (0).
+// 0 on the C3: a second begin() in one cycle with BLE up crashes the
+// single-core coexistence stack; the unpinned attempt runs next cycle.
+#define WIFI_PIN_RETRY_SAME_CYCLE 0
 #define HTTP_TIMEOUT_MS         10000    // response read
 
 // TCP connect and TLS handshake caps for the ingest POST.
@@ -157,6 +172,9 @@
 #define BUFFER_FREE_MIN_BYTES   (150 * 1024UL)
 #define BUFFER_FREE_MIN_PCT     10        // also keep >= 10% free
 #define MAX_SCAN_RESULTS        12        // top-N APs returned over BLE
+// Cap on the BLE Wi-Fi Scan JSON. NimBLE rejects characteristic values over
+// 512 B; entries past this are dropped (they are the weakest — sorted by RSSI).
+#define SCAN_JSON_MAX_BYTES     500
 
 // ---------- Fault thresholds ----------
 #define PZEM_FAIL_THRESHOLD     3         // consecutive Modbus fails -> PZEM ERROR

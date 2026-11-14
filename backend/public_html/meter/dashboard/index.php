@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../api/_db.php';
+require_once __DIR__ . '/../api/_ui.php';
 $user = require_login();
 $pdo  = db();
 
@@ -79,58 +80,23 @@ if ($selected !== '') {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — dashboard</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
+<meta name="theme-color" content="#f6fbf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101510" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=9">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<style>
-  .relay-state { display: inline-flex; align-items: baseline; gap: 0.3rem; font-size: 0.8rem; color: var(--muted); }
-  .relay-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%;
-               background: #c8ccc4; align-self: center; }
-  .relay-dot.on      { background: #1f9d3a; box-shadow: 0 0 0 3px rgba(31,157,58,0.18); }
-  .relay-dot.off     { background: #98a09a; }
-  .relay-dot.stale   { background: #d8a200; }
-  .relay-dot.unknown { background: #c8ccc4; }
-  .relay-state .relay-label { color: var(--text); }
-  .custom-range { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
-                  font-size: 0.85rem; color: var(--muted); }
-  .custom-range[hidden] { display: none; }
-  .custom-range input[type=date] { padding: 0.35rem 0.5rem; border: 1px solid var(--border);
-                                   border-radius: 6px; font-size: 0.9rem; }
-  .custom-range .range-err { color: var(--danger); }
-  .meter-reading { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
-  .meter-reading b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .meter-reading:empty { display: none; }
-  /* Meter readings per bar: the arithmetic behind each energy bar. */
-  table.grid.readings th:not(:first-child),
-  table.grid.readings td:not(:first-child) { text-align: right; }
-  table.grid.readings td.gen { font-weight: 600; color: var(--primary); }
-  table.grid.readings tfoot th {
-    background: transparent; border-bottom: none; text-transform: none;
-    letter-spacing: 0; font-size: 0.9rem; color: var(--text);
-  }
-  table.grid.readings tfoot th:last-child {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-weight: 600; color: var(--primary); text-align: right;
-  }
-  @media (max-width: 640px) {
-    /* .controls stacks its children on mobile; these two are status text, not
-       fields, so keep them on one wrapping line instead of one row each. */
-    .controls .last-sync, .controls .relay-state { flex-wrap: wrap; }
-    #per-meter .stat { padding: 0.65rem; }
-    #per-meter .stat b { font-size: 1.2rem; }
-  }
-</style>
+<script src="/dashboard/assets/theme.js?v=1"></script>
 </head><body>
 
 <header class="topbar">
-  <div class="brand">AC Energy Meter</div>
+  <div class="brand"><span class="logo"><?= ui_icon('bolt') ?></span>AC Energy Meter</div>
   <div class="user">
-    Signed in as <b><?= h($user['username']) ?></b>
-    &middot; <a href="/dashboard/report.php">reports</a>
+    <span class="who">Signed in as <b><?= h($user['username']) ?></b></span>
+    <a href="/dashboard/report.php<?= $selected ? '?device_id=' . urlencode($selected) : '' ?>"><?= ui_icon('chart') ?>Reports</a>
     <?php if (!empty($user['is_admin'])): ?>
-      &middot; <a href="/admin/">admin</a>
+      <a href="/admin/"><?= ui_icon('shield') ?>Admin</a>
     <?php endif; ?>
-    &middot; <a href="/api/logout.php">sign out</a>
+    <a href="/api/logout.php"><?= ui_icon('logout') ?>Sign out</a>
   </div>
 </header>
 
@@ -170,25 +136,28 @@ if ($selected !== '') {
       </select>
     </label>
     <?php endif; ?>
-    <div class="range-buttons">
-      <button type="button" data-range="today">Today</button>
-      <button type="button" data-range="24h">24 h</button>
-      <button type="button" data-range="7d">7 days</button>
-      <button type="button" data-range="30d">30 days</button>
-      <button type="button" data-range="12m">12 months</button>
-      <button type="button" data-range="custom">Custom</button>
+    <!-- Fixed ranges as one segmented control; Custom as a chip beside it that
+         only opens the date filter (Apply is what loads it). -->
+    <div class="range-row">
+      <div class="range-buttons" role="group" aria-label="Range">
+        <button type="button" data-range="today">Today</button>
+        <button type="button" data-range="24h">24 h</button>
+        <button type="button" data-range="7d"><span class="lbl-full">7 days</span><span class="lbl-short">7 d</span></button>
+        <button type="button" data-range="30d"><span class="lbl-full">30 days</span><span class="lbl-short">30 d</span></button>
+        <button type="button" data-range="12m"><span class="lbl-full">12 months</span><span class="lbl-short">12 mo</span></button>
+      </div>
+      <button type="button" class="chip" id="btn-custom" aria-expanded="false"
+              aria-controls="custom-range"><?= ui_icon('calendar') ?><span id="custom-label">Custom range</span></button>
     </div>
     <!-- Custom date range. Both ends are whole days, inclusive. -->
-    <span class="custom-range" hidden>
-      <input type="date" id="custom-from" aria-label="From date">
-      to
-      <input type="date" id="custom-to" aria-label="To date">
+    <div class="custom-range" id="custom-range" hidden>
+      <label>From <input type="date" id="custom-from"></label>
+      <label>To <input type="date" id="custom-to"></label>
       <button type="button" id="custom-apply">Apply</button>
-      <span class="range-err" id="custom-err"></span>
-    </span>
+    </div>
     <?php if ($selected_meta): ?>
       <span class="last-sync">
-        Last sync:
+        <?= ui_icon('clock') ?> Last sync:
         <?php if (!empty($selected_meta['last_sync_at'])): ?>
           <b><?= h($selected_meta['last_sync_at']) ?></b>
           <span class="rel" data-ts="<?= h($selected_meta['last_sync_at']) ?>"></span>
@@ -196,6 +165,9 @@ if ($selected !== '') {
           <b>never</b>
         <?php endif; ?>
       </span>
+      <!-- One pill per relay; extra pills are cloned from this one by JS. -->
+      <div class="relay-row">
+      <span class="relay-title"><?= ui_icon('relay') ?> Relay:</span>
       <span class="relay-state"
             data-on="<?= ($relay_meta && $relay_meta['relay_on'] !== null) ? (int)$relay_meta['relay_on'] : '' ?>"
             data-mode="<?= h((string)($relay_meta['relay_mode'] ?? '')) ?>"
@@ -203,47 +175,66 @@ if ($selected !== '') {
             data-int="<?= (int)($relay_meta['log_interval_sec'] ?? 900) ?>">
         <span class="relay-dot unknown"></span><span class="relay-label">—</span>
       </span>
+      </div>
     <?php endif; ?>
   </form>
 
   <section class="cards stats">
-    <div class="stat"><span>Current</span>     <div class="stat-val"><b id="stat-now">—</b><i>W</i></div></div>
-    <div class="stat"><span>Peak</span>        <div class="stat-val"><b id="stat-peak">—</b><i>W</i></div></div>
-    <div class="stat"><span>Period total</span><div class="stat-val"><b id="stat-total">—</b><i>kWh</i></div></div>
-    <div class="stat"><span>Meter reading</span><div class="stat-val"><b id="stat-meter">—</b><i>kWh</i></div></div>
+    <div class="stat tone-primary">
+      <span class="badge"><?= ui_icon('bolt') ?></span>
+      <span>Current</span><div class="stat-val"><b id="stat-now">—</b><i>W</i></div>
+    </div>
+    <div class="stat tone-tertiary">
+      <span class="badge"><?= ui_icon('trend') ?></span>
+      <span>Peak</span><div class="stat-val"><b id="stat-peak">—</b><i>W</i></div>
+    </div>
+    <div class="stat tone-secondary">
+      <span class="badge"><?= ui_icon('chart') ?></span>
+      <span>Period total</span><div class="stat-val"><b id="stat-total">—</b><i>kWh</i></div>
+    </div>
+    <div class="stat" id="stat-meter-card" title="Latest cumulative meter reading">
+      <span class="badge"><?= ui_icon('gauge') ?></span>
+      <span>Meter reading</span><div class="stat-val"><b id="stat-meter">—</b><i>kWh</i></div>
+    </div>
   </section>
 
   <!-- Per-meter breakdown. Populated only in "All meters" mode, where the four
        top cards show the COMBINED figures across every meter. -->
   <section class="cards stats" id="per-meter" hidden></section>
 
+  <!-- Energy, then power, then the readings behind the energy bars — the same
+       order as the Solar Monitor dashboard. -->
   <section class="card">
-    <h2 id="chart-title">Energy</h2>
-    <div class="chart-wrap"><canvas id="chart-energy"></canvas></div>
+    <h2 class="sec"><span class="badge tint-primary"><?= ui_icon('bolt') ?></span>
+      <span class="t" id="chart-title">Energy</span><span class="cap" id="chart-cap"></span></h2>
+    <div class="chart-box sm"><canvas id="chart-energy"></canvas></div>
     <!-- Meter reading across the charted period. The per-bar readings drawn
          under the bars vanish once the bars get narrow (30 days, or any phone),
          so this line is what always carries the figure. -->
-    <p class="meter-reading" id="meter-reading"></p>
+    <p class="meter-span" id="meter-reading"></p>
+  </section>
+
+  <section class="card">
+    <h2 class="sec"><span class="badge tint-tertiary"><?= ui_icon('trend') ?></span>
+      <span class="t">Power</span><span class="cap">W</span></h2>
+    <div class="chart-box sm"><canvas id="chart-power"></canvas></div>
   </section>
 
   <section class="card" id="readings-card">
-    <h2>Meter readings per bar</h2>
+    <h2 class="sec"><span class="badge tint-secondary"><?= ui_icon('list') ?></span>
+      <span class="t">Meter readings per bar</span></h2>
     <p class="muted">The cumulative meter reading at the start and end of each
-       bar above &mdash; continued from the old meter's baseline, so it reads
-       like the physical meter. Generated = end &minus; start.</p>
+       energy bar &mdash; continued from the old meter's baseline, so it reads
+       like the physical meter. Generated = end &minus; start, and the newest end
+       reading is the Meter reading card above. All values in kWh.</p>
     <table class="grid readings">
       <thead><tr id="readings-head"></tr></thead>
       <tbody id="readings-body"></tbody>
       <tfoot>
-        <tr id="readings-foot"><th>Total</th><th></th><th></th><th id="readings-total">&mdash;</th></tr>
+        <tr id="readings-foot"><th>Total</th><th id="readings-total">&mdash;</th><th></th><th></th></tr>
       </tfoot>
     </table>
     <p class="muted" id="readings-empty" style="display:none">No readings in this range.</p>
-  </section>
-
-  <section class="card">
-    <h2>Power</h2>
-    <div class="chart-wrap"><canvas id="chart-power"></canvas></div>
   </section>
 </main>
 
@@ -258,12 +249,12 @@ const CHANNELS = CHANNEL === 0
   : [CHANNEL];
 const MULTI = CHANNELS.length > 1;
 // One colour per meter, reused by both charts so a meter reads the same in each.
-const CH_COLOURS = [
-  { line: '#1f6e2a', fill: 'rgba(31,110,42,0.7)'  },
-  { line: '#c97a1a', fill: 'rgba(201,122,26,0.7)' },
-  { line: '#1a5fa8', fill: 'rgba(26,95,168,0.7)'  },
-];
-const chColour = ch => CH_COLOURS[(ch - 1) % CH_COLOURS.length];
+// Read from the theme tokens on every call, so a light/dark switch recolours.
+const CH_TOKENS = ['--primary', '--tertiary', '--ch3'];
+const chColour = ch => {
+  const line = MeterTheme.cssVar(CH_TOKENS[(ch - 1) % CH_TOKENS.length]);
+  return { line, fill: MeterTheme.withAlpha(line, 0.8) };
+};
 // Server timestamps are in APP_TIMEZONE (IST). Anchor parsing to that offset
 // so "X ago" is correct regardless of the viewer's browser time zone.
 const APP_TZ_OFFSET = <?= json_encode(app_tz_offset()) ?>;
@@ -352,8 +343,8 @@ const endpointLabelsPlugin = {
     const ctx = chart.ctx;
     const yTop = chart.scales.x.bottom + 2;         // just below the month labels
     ctx.save();
-    ctx.font = '10px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#6b7280';
+    ctx.font = '10px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = MeterTheme.cssVar('--on-surface-variant');
     ctx.textAlign = 'center';
     const fmt = v => (v == null ? '' : Number(v).toLocaleString(undefined,
                        { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
@@ -388,14 +379,18 @@ const endpointLabelsPlugin = {
   },
 };
 
-function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showLegend){
+function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showLegend, tooltipCallbacks){
+  MeterTheme.applyChartDefaults();
   const ctx = document.getElementById(canvasId).getContext('2d');
   const x = {
     type: 'time',
     time: { tooltipFormat: 'PPp', unit: xOpts.unit || undefined },
+    grid: { display: false },
+    border: { display: false },
     // A phone fits roughly half the tick labels a laptop does; let Chart.js
     // drop the rest instead of overprinting them on top of each other.
-    ticks: { autoSkip: true, maxTicksLimit: narrowScreen() ? 6 : 12 },
+    ticks: { autoSkip: true, autoSkipPadding: 12, maxRotation: 0,
+             maxTicksLimit: narrowScreen() ? 6 : 12 },
   };
   if (xOpts.min) x.min = xOpts.min.getTime();
   if (xOpts.max) x.max = xOpts.max.getTime();
@@ -403,7 +398,7 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showL
     type, data: { datasets },
     plugins: showEndpoints ? [endpointLabelsPlugin] : [],
     options: {
-      // The .chart-wrap parent owns the height (see style.css); keeping the
+      // The .chart-box parent owns the height (see style.css); keeping the
       // canvas's attribute ratio instead collapses the chart to a ~120px strip
       // on a phone.
       responsive: true, maintainAspectRatio: false, animation: false,
@@ -412,11 +407,16 @@ function makeChart(canvasId, type, datasets, yLabel, xOpts, showEndpoints, showL
       layout: showEndpoints ? { padding: { bottom: 28 } } : {},
       scales: {
         x,
-        y: { beginAtZero: true, title: { display: true, text: yLabel } },
+        y: { beginAtZero: true, border: { display: false },
+             title: { display: true, text: yLabel } },
       },
-      // A legend only earns its space when more than one meter is plotted;
-      // with a single series the chart title already says what it is.
-      plugins: { legend: { display: !!showLegend, position: 'bottom' } },
+      plugins: {
+        // A legend only earns its space when more than one meter is plotted;
+        // with a single series the chart title already says what it is.
+        legend: { display: !!showLegend, position: 'bottom',
+                  labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'circle' } },
+        tooltip: tooltipCallbacks ? { callbacks: tooltipCallbacks } : {},
+      },
     },
   });
 }
@@ -464,12 +464,16 @@ function renderReadings(per, R){
   const table   = document.querySelector('table.readings');
   const unitHead = R.xUnit === 'month' ? 'Month' : (R.xUnit === 'hour' ? 'Hour' : 'Day');
 
+  // Phones get the short labels so every column fits without scrolling.
+  const lbl = (full, short) => `<span class="lbl-full">${full}</span><span class="lbl-short">${short}</span>`;
   headEl.innerHTML = (MULTI ? '<th>Meter</th>' : '') +
-    `<th>${unitHead}</th><th>Start reading (kWh)</th>` +
-    '<th>End reading (kWh)</th><th>Generated (kWh)</th>';
-  // Keep the footer's blank cells aligned with the header's column count.
-  footEl.innerHTML = '<th>Total</th>' + '<th></th>'.repeat(MULTI ? 3 : 2) +
-    '<th id="readings-total">\u2014</th>';
+    `<th>${unitHead}</th>` +
+    `<th>${lbl('Generated (kWh)', 'Generated')}</th>` +
+    `<th>${lbl('Start reading (kWh)', 'Start')}</th>` +
+    `<th>${lbl('End reading (kWh)', 'End')}</th>`;
+  // Total sits under Generated; keep the blank cells aligned with the header.
+  footEl.innerHTML = (MULTI ? '<th></th>' : '') + '<th>Total</th>' +
+    '<th id="readings-total">\u2014</th><th></th><th></th>';
 
   const rows = [];
   per.filter(r => r.ok).forEach(r => {
@@ -497,17 +501,25 @@ function renderReadings(per, R){
     tr.innerHTML =
       (MULTI ? `<td>Meter ${r.ch}</td>` : '') +
       `<td>${bucketLabel(r.t, R.xUnit)}</td>` +
+      `<td class="mono gen">${r.y.toFixed(3)}</td>` +
       `<td class="mono">${r.s.toFixed(3)}</td>` +
-      `<td class="mono">${r.e.toFixed(3)}</td>` +
-      `<td class="mono gen">${r.y.toFixed(3)}</td>`;
+      `<td class="mono">${r.e.toFixed(3)}</td>`;
     bodyEl.appendChild(tr);
   });
   document.getElementById('readings-total').textContent = sum.toFixed(3);
 }
 
+// Grouped thousands — readings continued from the old meter run to five digits,
+// and 8,984.85 is a lot easier to read than 8984.85.
+const fmtKwhGrouped = v => Number(v).toLocaleString(undefined,
+                             { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 async function loadRange(rangeKey){
   const R = RANGES[rangeKey];
   document.getElementById('chart-title').textContent = R.label;
+  document.getElementById('chart-cap').textContent = R.energyLabel;
+  document.getElementById('custom-label').textContent =
+    rangeKey === 'custom' ? R.label : 'Custom range';
   const from = isoLocal(R.from());
   // Preset ranges run up to now (the server's default `to`); a custom range
   // passes its own end.
@@ -584,14 +596,39 @@ async function loadRange(rangeKey){
   energyChart = makeChart('chart-energy', 'bar', per.map(r => ({
     label: MULTI ? `Meter ${r.ch}` : R.energyLabel,
     data: r.energy,
-    backgroundColor: MULTI ? chColour(r.ch).fill : 'rgba(31,110,42,0.7)',
-  })), R.energyLabel, xOpts, !MULTI, MULTI);
-  powerChart = makeChart('chart-power', 'line', per.map(r => ({
-    label: MULTI ? `Meter ${r.ch}` : 'Avg power (W)',
-    data: r.power,
-    borderColor: MULTI ? chColour(r.ch).line : '#c97a1a',
-    tension: 0.25,
-  })), 'W', xOpts, false, MULTI);
+    backgroundColor: chColour(r.ch).fill,
+    hoverBackgroundColor: chColour(r.ch).line,
+    borderRadius: 6, borderSkipped: 'start', maxBarThickness: 28,
+  })), R.energyLabel, xOpts, !MULTI, MULTI, {
+    // The arithmetic behind the bar: its two meter readings and their difference.
+    afterBody: (items) => {
+      const r = (items[0] && items[0].raw) || {};
+      if (r.s == null || r.e == null) return [];
+      return [
+        'Start reading: ' + r.s.toFixed(3) + ' kWh',
+        'End reading: '   + r.e.toFixed(3) + ' kWh',
+        'Generated: '     + (r.y || 0).toFixed(3) + ' kWh',
+      ];
+    },
+  });
+  powerChart = makeChart('chart-power', 'line', per.map(r => {
+    const c = chColour(r.ch).line;
+    // A day at the 5-min log interval is ~288 points; full-size markers turn
+    // that into a solid band, so drop them once the series gets dense.
+    const dense = r.power.length > 60;
+    return {
+      label: MULTI ? `Meter ${r.ch}` : 'Avg power (W)',
+      data: r.power,
+      borderColor: c, pointBackgroundColor: c,
+      // Soft fade under a single line; overlapping fades would muddy several.
+      fill: MULTI ? false : 'origin',
+      backgroundColor: MULTI ? c : MeterTheme.areaFade(c, 0.35),
+      tension: dense ? 0.1 : 0.25,
+      pointRadius: dense ? 0 : 3, pointHitRadius: 6,
+      borderWidth: dense ? 2 : 2.5,
+      borderCapStyle: 'round', borderJoinStyle: 'round',
+    };
+  }), 'W', xOpts, false, MULTI);
 
   // Stats. Period total is the energy used in the window: each range's single
   // start->end meter difference (server total_kwh, one MAX-MIN over the whole
@@ -612,8 +649,10 @@ async function loadRange(rangeKey){
   const meterNow   = withLatest.length
     ? withLatest.reduce((a, r) => a + r.latest, 0) - baseline * (withLatest.length - 1)
     : null;
-  document.getElementById('stat-meter').textContent =
-    meterNow === null ? '—' : meterNow.toFixed(2);
+  const meterEl = document.getElementById('stat-meter');
+  meterEl.textContent = meterNow === null ? '—' : fmtKwhGrouped(meterNow);
+  // A five-digit reading drops a size so it stays inside the tile on phones.
+  meterEl.classList.toggle('long', meterEl.textContent.length > 7);
 
   // Meter reading across the charted window: where the counter stood at the
   // first bucket and where it stands at the last, both already continuing from
@@ -627,8 +666,8 @@ async function loadRange(rangeKey){
                                     : [...r.energy].reverse().find(p => p.e != null);
     if (!first || !last) return null;
     return (MULTI ? `Meter ${r.ch}: ` : '') +
-           `<b>${fmtKwh(first.s)}</b> → <b>${fmtKwh(last.e)}</b> kWh ` +
-           `(${fmtKwh(last.e - first.s)} kWh)`;
+           `<b>${fmtKwh(first.s)}</b> &rarr; <b>${fmtKwh(last.e)}</b> kWh ` +
+           `<span class="gen">(${fmtKwh(last.e - first.s)} kWh)</span>`;
   }).filter(Boolean);
   document.getElementById('meter-reading').innerHTML =
     readings.length ? 'Meter reading: ' + readings.join('<br>') : '';
@@ -649,9 +688,9 @@ async function loadRange(rangeKey){
       d.className = 'stat';
       d.dataset.ch = String(r.ch);   // loadLive() fills in the live watts below
       d.innerHTML =
-        `<span style="color:${chColour(r.ch).line}">\u25CF Meter ${r.ch}</span>` +
+        `<span class="meter-name"><span class="swatch" style="background:${chColour(r.ch).line}"></span>Meter ${r.ch}</span>` +
         `<div class="stat-val"><b>${r.total.toFixed(2)}</b><i>kWh</i></div>` +
-        `<div class="muted" style="font-size:0.8rem">` +
+        `<div class="meter-sub">` +
         `<span class="live-w">— W now</span> · peak ${peak.toFixed(0)} W</div>`;
       pmEl.appendChild(d);
     });
@@ -697,40 +736,72 @@ async function loadLive(){
 }
 
 let currentRangeKey = 'today';
-const customEl = document.querySelector('.custom-range');
-const customFrom = document.getElementById('custom-from');
-const customTo   = document.getElementById('custom-to');
-const customErr  = document.getElementById('custom-err');
+const customToggle = document.getElementById('btn-custom');
+const customPanel  = document.getElementById('custom-range');
+const customFrom   = document.getElementById('custom-from');
+const customTo     = document.getElementById('custom-to');
+const customApply  = document.getElementById('custom-apply');
 const ymd = d => isoLocal(d).slice(0, 10);
 
-document.querySelectorAll('.range-buttons button').forEach(b => {
+function setActiveRange(btn){
+  document.querySelectorAll('.range-buttons button, #btn-custom').forEach(x => x.classList.remove('on'));
+  btn.classList.add('on');
+}
+function showCustomPanel(show){
+  customPanel.hidden = !show;
+  customToggle.setAttribute('aria-expanded', String(show));
+  customToggle.classList.toggle('open', show);
+}
+
+// The fixed ranges load straight away and put the date filter away again.
+document.querySelectorAll('.range-buttons button[data-range]').forEach(b => {
   b.addEventListener('click', () => {
-    document.querySelectorAll('.range-buttons button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
-    // "Custom" only reveals the date pickers; the chart reloads on Apply.
-    customEl.hidden = b.dataset.range !== 'custom';
-    if (b.dataset.range === 'custom') {
-      if (!customTo.value)   customTo.value   = ymd(new Date());
-      if (!customFrom.value) customFrom.value = ymd(daysAgo(6));
-      customTo.max = customFrom.max = ymd(new Date());
-      return;
-    }
+    showCustomPanel(false);
+    setActiveRange(b);
     currentRangeKey = b.dataset.range;
     loadRange(currentRangeKey);
   });
 });
 
-document.getElementById('custom-apply').addEventListener('click', () => {
+// "Custom range" only reveals the From/To filter — Apply is what loads it, so
+// the chart doesn't change under you while you're still picking dates.
+customToggle.addEventListener('click', () => {
+  const opening = customPanel.hidden;
+  showCustomPanel(opening);
+  if (opening) customFrom.focus();
+});
+
+customApply.addEventListener('click', () => {
   const f = customFrom.value, t = customTo.value;
-  customErr.textContent = '';
-  if (!f || !t) { customErr.textContent = 'Pick both dates.'; return; }
-  if (f > t)    { customErr.textContent = 'From must be on or before To.'; return; }
+  // Half-filled or reversed dates leave the current view alone rather than
+  // blanking the chart.
+  if (!f || !t || f > t) {
+    alert('Pick a From and To date, with From on or before To.');
+    return;
+  }
   RANGES.custom = buildCustomRange(f, t);
+  setActiveRange(customToggle);   // Custom stays lit as the active range
   currentRangeKey = 'custom';
   loadRange(currentRangeKey);
 });
+
+// Custom range starts on the last week and can't be pointed at the future.
+(function initCustomDates(){
+  const today = ymd(new Date());
+  customFrom.value = ymd(daysAgo(6));
+  customTo.value   = today;
+  customFrom.max = customTo.max = today;
+  // Enter in a date field applies the range; without this the surrounding
+  // form submits and the page reloads on the old range.
+  [customFrom, customTo].forEach(el => el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); customApply.click(); }
+  }));
+})();
+
 // initial load: today
 document.querySelector('.range-buttons button[data-range="today"]').click();
+// Charts take their colours from the theme tokens, so redraw on a light/dark switch.
+MeterTheme.onSchemeChange(() => loadRange(currentRangeKey));
 
 // Chart.js resizes its canvas on rotation by itself, but the tick budget and
 // the endpoint labels are decided at build time — so rebuild when the viewport
@@ -841,6 +912,9 @@ document.querySelector('.range-buttons button[data-range="today"]').click();
         ? r.relays
         : [{ ch: 1, on: r.on, mode: r.mode, reported_at: r.reported_at }];
       const multi = list.length > 1;
+      // Create every pill first: the "R1 " prefix depends on how many pills
+      // exist, and relay 1 used to be drawn before relay 2's pill was made.
+      list.forEach(x => pillFor(Number(x.ch) || 1));
       list.forEach(x => {
         const ch = Number(x.ch) || 1;
         render({ on: x.on, mode: x.mode, at: x.reported_at, interval: r.interval },

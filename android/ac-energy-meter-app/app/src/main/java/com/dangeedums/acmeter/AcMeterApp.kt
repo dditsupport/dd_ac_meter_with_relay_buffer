@@ -6,9 +6,11 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import com.dangeedums.acmeter.ble.BleScanner
 import com.dangeedums.acmeter.cloud.CloudClient
+import com.dangeedums.acmeter.cloud.CloudSignIn
 import com.dangeedums.acmeter.cloud.PersistentCookieStorage
 import com.dangeedums.acmeter.data.BlePinStore
 import com.dangeedums.acmeter.data.BleUnlockRegistry
+import com.dangeedums.acmeter.data.CloudCredentialStore
 import com.dangeedums.acmeter.data.CloudSessionStore
 import com.dangeedums.acmeter.data.DeviceStore
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +39,12 @@ class AcMeterApp : Application() {
         private set
     lateinit var blePinStore: BlePinStore
         private set
+    /** "Remember me" sign-in (password encrypted with a Keystore key). */
+    lateinit var cloudCredentialStore: CloudCredentialStore
+        private set
+    /** Renews an expired cloud session with the saved sign-in. */
+    lateinit var cloudSignIn: CloudSignIn
+        private set
 
     /** Process-scoped set of BLE devices unlocked with their PIN this run. */
     val bleUnlockRegistry = BleUnlockRegistry()
@@ -50,6 +58,8 @@ class AcMeterApp : Application() {
         cloudClient       = CloudClient(PersistentCookieStorage(cloudSessionDataStore))
         cloudSessionStore = CloudSessionStore(cloudSessionDataStore)
         blePinStore       = BlePinStore(blePinDataStore)
+        cloudCredentialStore = CloudCredentialStore(cloudSessionDataStore)
+        cloudSignIn       = CloudSignIn(cloudClient, cloudCredentialStore, cloudSessionStore)
 
         // Pull persisted base URL into the client as early as possible so
         // subsequent calls hit the right host.

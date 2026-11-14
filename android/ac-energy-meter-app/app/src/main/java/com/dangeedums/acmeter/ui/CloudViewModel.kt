@@ -9,9 +9,12 @@ import androidx.lifecycle.viewModelScope
 import com.dangeedums.acmeter.AcMeterApp
 import com.dangeedums.acmeter.cloud.CloudClient
 import com.dangeedums.acmeter.cloud.CloudDevice
+import com.dangeedums.acmeter.cloud.CloudSignIn
+import com.dangeedums.acmeter.cloud.DevicesResponse
 import com.dangeedums.acmeter.cloud.ReadingPoint
 import com.dangeedums.acmeter.data.BlePinStore
 import com.dangeedums.acmeter.data.BleUnlockRegistry
+import com.dangeedums.acmeter.data.CloudCredentialStore
 import com.dangeedums.acmeter.data.CloudSessionStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +57,8 @@ class CloudViewModel(
     private val session: CloudSessionStore,
     private val blePinStore: BlePinStore,
     private val unlockRegistry: BleUnlockRegistry,
+    private val signIn: CloudSignIn,
+    private val credentials: CloudCredentialStore,
 ) : AndroidViewModel(application) {
 
     private val _ui = MutableStateFlow(CloudUi())
@@ -91,7 +96,10 @@ class CloudViewModel(
     }
 
     private suspend fun tryAutoFetch(wasLoggedIn: Boolean) {
-        runCatching { client.devices() }
+        // devicesRenewingSession() signs in again with the saved password when
+        // the server has expired the session, so a remembered user opens
+        // straight on the dashboard instead of the login screen.
+        runCatching { devicesRenewingSession() }
             .onSuccess { resp ->
                 if (resp.ok) {
                     // Session is alive but CSRF was wiped at process restart — refresh it.
@@ -120,19 +128,45 @@ class CloudViewModel(
             }
     }
 
+    /**
+     * GET /devices; if the server says the session is gone, renew it with the
+     * saved sign-in ("Remember me") and ask once more.
+     */
+    private suspend fun devicesRenewingSession(): DevicesResponse {
+        val first = client.devices()
+        if (first.ok || !CloudSignIn.isSessionError(first.error)) return first
+        if (signIn.renew() != CloudSignIn.Status.SignedIn) return first
+        return client.devices()
+    }
+
+    /** The session is gone and could not be renewed: back to the login screen. */
+    private suspend fun dropToLogin(error: String?) {
+        session.setLoggedIn(false)
+        _ui.value = CloudUi(
+            baseUrl = _ui.value.baseUrl,
+            username = _ui.value.username,
+            error = error ?: "Session expired, please sign in again.",
+        )
+    }
+
     fun setBaseUrl(url: String) {
         _ui.value = _ui.value.copy(baseUrl = url)
         client.setBaseUrl(url)
         viewModelScope.launch { session.update(baseUrl = url) }
     }
 
-    fun login(username: String, password: String) {
+    /**
+     * @param remember keep the sign-in (password encrypted with a Keystore key)
+     *   so an expired session is renewed without asking again.
+     */
+    fun login(username: String, password: String, remember: Boolean) {
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
             runCatching { client.login(username, password) }
                 .onSuccess { resp ->
                     if (resp.ok) {
                         session.update(username = username)
+                        if (remember) credentials.save(username, password) else credentials.clear()
                         _ui.value = _ui.value.copy(loggedIn = true, username = username, loading = false)
                         refreshDevices()
                     } else {
@@ -145,6 +179,9 @@ class CloudViewModel(
 
     fun logout() {
         viewModelScope.launch {
+            // Signing out also forgets the saved password, so nothing signs
+            // back in behind the user's back.
+            runCatching { credentials.clear() }
             runCatching { client.logout() }
             // Drop cached BLE PINs + unlocks so registered devices re-lock.
             runCatching { blePinStore.clear() }
@@ -157,8 +194,15 @@ class CloudViewModel(
     fun refreshDevices() {
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
-            runCatching { client.devices() }
+            runCatching { devicesRenewingSession() }
                 .onSuccess { resp ->
+                    if (!resp.ok) {
+                        // Valid JSON but refused: without this an expired session
+                        // looked like "you have no devices" (and wiped the PINs).
+                        if (CloudSignIn.isSessionError(resp.error)) dropToLogin(null)
+                        else _ui.value = _ui.value.copy(loading = false, error = resp.error ?: "fetch failed")
+                        return@onSuccess
+                    }
                     cachePins(resp.devices)
                     val selected = _ui.value.selectedDeviceId
                         ?: resp.devices.firstOrNull()?.device_id
@@ -205,8 +249,19 @@ class CloudViewModel(
         }
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
-            runCatching { client.readings(dev, r.aggregate, fromIso = fromIso, channel = ch) }
+            runCatching {
+                val first = client.readings(dev, r.aggregate, fromIso = fromIso, channel = ch)
+                // Session expired since the last call: renew it and ask once more.
+                if (!first.ok && CloudSignIn.isSessionError(first.error) &&
+                    signIn.renew() == CloudSignIn.Status.SignedIn) {
+                    client.readings(dev, r.aggregate, fromIso = fromIso, channel = ch)
+                } else first
+            }
                 .onSuccess { resp ->
+                    if (!resp.ok && CloudSignIn.isSessionError(resp.error)) {
+                        dropToLogin(null)
+                        return@onSuccess
+                    }
                     _ui.value = if (resp.ok) {
                         _ui.value.copy(loading = false, points = resp.points, periodKwh = resp.total_kwh)
                     } else {
@@ -228,6 +283,7 @@ class CloudViewModel(
                 CloudViewModel(
                     application, app.cloudClient, app.cloudSessionStore,
                     app.blePinStore, app.bleUnlockRegistry,
+                    app.cloudSignIn, app.cloudCredentialStore,
                 )
             }
         }

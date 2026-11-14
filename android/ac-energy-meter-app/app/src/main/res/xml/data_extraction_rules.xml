@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup and device-transfer rules. The saved-device list and
+     BLE PINs are kept; the cloud session store (base URL, username, device
+     token, login cookies and the encrypted saved password) is not, so a
+     restored phone signs in again instead of reusing a session copied from
+     another device. The saved password could not be decrypted there anyway:
+     its key lives in this phone's Android Keystore. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/cloud_session.preferences_pb" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore/cloud_session.preferences_pb" />
+    </device-transfer>
+</data-extraction-rules>

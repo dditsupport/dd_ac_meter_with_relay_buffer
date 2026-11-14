@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../api/_db.php';
+require_once __DIR__ . '/../api/_ui.php';
 require_admin();
 $pdo = db();
 
@@ -62,13 +63,15 @@ $locations = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — devices</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
+<meta name="theme-color" content="#f6fbf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101510" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=9">
 <style>
   /* Devices as compact 2-line cards — everything fits the viewport width by
      wrapping, so there is no left/right scrolling. */
   .dev-list { display: flex; flex-direction: column; gap: 0.55rem; }
-  .dev      { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; background: #fff; }
-  .dev:nth-child(even) { background: #fafbf8; }
+  .dev      { border: 1px solid var(--card-border); border-radius: var(--r-md); padding: 0.7rem 0.9rem; background: var(--card); }
+  .dev:nth-child(even) { background: var(--sc-low); }
   .dev-row  { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: flex-end; }
   .dev-row.line2 { margin-top: 0.55rem; padding-top: 0.55rem; border-top: 1px dashed var(--border);
                    align-items: center; }
@@ -96,15 +99,11 @@ $locations = $pdo->query(
   .dev .f-maint .dash   { color: var(--muted); }
   .dev-meta { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
   .dev-meta b { color: var(--text); font-weight: 600; }
-  .relay-dot { display: inline-block; width: 0.62rem; height: 0.62rem; border-radius: 50%;
-               margin-right: 0.4rem; vertical-align: middle; background: #c8ccc4; }
-  .relay-dot.on      { background: #1f9d3a; box-shadow: 0 0 0 3px rgba(31,157,58,0.18); }
-  .relay-dot.off     { background: #98a09a; }
-  .relay-dot.stale   { background: #d8a200; }
-  .relay-dot.unknown { background: #c8ccc4; }
+  /* .relay-dot colours come from style.css; only the inline spacing is local. */
+  .col-relay .relay-dot { margin-right: 0.4rem; vertical-align: middle; }
   .col-relay { white-space: nowrap; font-size: 0.85rem; color: var(--muted); }
   .col-relay .relay-label { color: var(--text); vertical-align: middle; }
-  .col-relay .relay-warn  { margin-left: 0.4rem; color: #b8860b; cursor: help;
+  .col-relay .relay-warn  { margin-left: 0.4rem; color: var(--warn); cursor: help;
                             font-size: 0.95rem; vertical-align: middle; }
   .dev-pin { white-space: nowrap; font-size: 0.8rem; color: var(--muted); }
   .dev-pin code.pin { font-size: 0.95rem; letter-spacing: 0.06em; color: var(--text); }
@@ -116,18 +115,18 @@ $locations = $pdo->query(
 </style>
 </head><body>
 <header class="topbar">
-  <div class="brand">AC Energy Meter — admin</div>
+  <div class="brand"><span class="logo"><?= ui_icon('shield') ?></span>Admin <small>devices</small></div>
   <div class="user">
-    <a href="/admin/">overview</a>
-    &middot; <a href="/admin/users.php">users</a>
-    &middot; <a href="/api/logout.php">sign out</a>
+    <a href="/admin/"><?= ui_icon('shield') ?>Overview</a>
+    <a href="/admin/users.php"><?= ui_icon('users') ?>Users</a>
+    <a href="/api/logout.php"><?= ui_icon('logout') ?>Sign out</a>
   </div>
 </header>
 <main class="container">
   <section class="card">
     <h2>Devices</h2>
     <p class="muted">Devices auto-register on first ingest POST. Assign each one to a user below.
-       A <span style="color:#b8860b">⚠</span> in the Relay column means the device's firmware
+       A <span style="color:var(--warn)">⚠</span> in the Relay column means the device's firmware
        predates v2.0.0 and would <b>cut the AC during open hours</b> — flash &ge; 2.0.0.</p>
     <div class="dev-list">
       <?php foreach ($devices as $d):
@@ -303,15 +302,15 @@ $locations = $pdo->query(
    (setAttribute('open')) works the same everywhere. */
 dialog        { display: none; }
 dialog[open]  { display: block; }
-.relay-dialog       { border:1px solid var(--border); border-radius:8px; padding:1rem 1.25rem; max-width:600px; width:90%;
+.relay-dialog       { border:1px solid var(--card-border); border-radius:var(--r-lg); background:var(--card); color:var(--on-surface); padding:1rem 1.25rem; max-width:600px; width:90%;
                       max-height:90vh; overflow:auto; overscroll-behavior:contain; }
 @supports (max-height: 90dvh) { .relay-dialog { max-height: 90dvh; } }
 /* No <dialog> support: no top layer either, so place and stack it by hand. */
 .relay-dialog.fallback-open { position:fixed; top:5vh; left:50%; transform:translateX(-50%); z-index:1000;
                               background:var(--surface); box-shadow:0 8px 30px rgba(0,0,0,0.3); }
 .relay-dialog::backdrop { background: rgba(0,0,0,0.35); }
-.relay-fw-warn      { margin:0 0 0.75rem; padding:0.5rem 0.7rem; border:1px solid #e6c200;
-                      background:#fff8e1; border-radius:6px; font-size:0.82rem; line-height:1.35; }
+.relay-fw-warn      { margin:0 0 0.75rem; padding:0.5rem 0.7rem; border:1px solid var(--warn);
+                      background:var(--warn-container); color:var(--on-surface); border-radius:var(--r-sm); font-size:0.82rem; line-height:1.35; }
 .relay-knobs        { margin-top:0.75rem; border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.75rem 0.75rem; }
 .relay-knobs legend { font-size:0.82rem; font-weight:600; padding:0 0.35rem; }
 .relay-knobs label  { display:inline-flex; flex-direction:column; font-size:0.8rem; gap:0.2rem; margin-right:1rem; }
@@ -320,7 +319,7 @@ dialog[open]  { display: block; }
 .relay-grid .dow    { display:flex; gap:0.15rem; flex-wrap:wrap; }
 .relay-grid .dow label { font-size:0.78rem; border:1px solid var(--border); border-radius:4px; padding:1px 5px; cursor:pointer; }
 .relay-grid .dow input { display:none; }
-.relay-grid .dow input:checked + span { background:var(--primary); color:#fff; padding:1px 5px; border-radius:3px; margin:-1px -5px; }
+.relay-grid .dow input:checked + span { background:var(--primary); color:var(--on-primary); padding:1px 5px; border-radius:3px; margin:-1px -5px; }
 .relay-grid input[type=time] { width:6.5rem; }
 .relay-grid .overnight { display:inline-flex; align-items:center; gap:0.3rem; font-size:0.76rem; color:var(--muted); white-space:nowrap; }
 .relay-grid .overnight input { margin:0; }

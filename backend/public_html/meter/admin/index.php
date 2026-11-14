@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../api/_db.php';
+require_once __DIR__ . '/../api/_ui.php';
 $user = require_admin();
 $pdo  = db();
 
@@ -20,15 +21,17 @@ $recent = $pdo->query(
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AC Energy Meter — admin</title>
-<link rel="stylesheet" href="/dashboard/assets/style.css?v=8">
+<meta name="theme-color" content="#f6fbf2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101510" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/dashboard/assets/style.css?v=9">
 </head><body>
 <header class="topbar">
-  <div class="brand">AC Energy Meter — admin</div>
+  <div class="brand"><span class="logo"><?= ui_icon('shield') ?></span>Admin <small>overview</small></div>
   <div class="user">
-    <a href="/dashboard/">dashboard</a>
-    &middot; <a href="/admin/users.php">users</a>
-    &middot; <a href="/admin/devices.php">devices</a>
-    &middot; <a href="/api/logout.php">sign out</a>
+    <a href="/dashboard/"><?= ui_icon('home') ?>Dashboard</a>
+    <a href="/admin/users.php"><?= ui_icon('users') ?>Users</a>
+    <a href="/admin/devices.php"><?= ui_icon('device') ?>Devices</a>
+    <a href="/api/logout.php"><?= ui_icon('logout') ?>Sign out</a>
   </div>
 </header>
 <main class="container">
@@ -39,7 +42,7 @@ $recent = $pdo->query(
     <div class="stat"><span>Total readings</span><b><?= number_format((int)$stats['row_count']) ?></b></div>
   </section>
   <section class="card">
-    <h2>Recent ingest activity</h2>
+    <h2 class="sec"><span class="badge tint-secondary"><?= ui_icon('list') ?></span><span class="t">Recent ingest activity</span></h2>
     <table class="grid">
       <thead><tr><th>When</th><th>Device</th><th>Payload</th><th>Inserted</th><th>Status</th><th>Notes</th></tr></thead>
       <tbody>

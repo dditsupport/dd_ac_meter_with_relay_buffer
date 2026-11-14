@@ -1,14 +1,103 @@
+/* Brand theme, shared with the Solar Monitor dashboard: Material 3 colour
+   roles — green primary, amber tertiary for power and peaks, tonal surfaces,
+   rounded cards. Follows the device's light / dark setting. */
 :root {
-  --bg: #f6f7f5;
-  --surface: #ffffff;
-  --border: #e3e6e1;
-  --text: #1a1f1c;
-  --muted: #6a716c;
-  --primary: #1f6e2a;
-  --primary-dim: #d7e8da;
-  --accent: #c97a1a;
-  --danger: #b3261e;
-  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+  color-scheme: light dark;
+
+  --primary: #1e6b2e;
+  --on-primary: #ffffff;
+  --primary-container: #a8f4a9;
+  --on-primary-container: #00210a;
+  --secondary: #506350;
+  --secondary-container: #d3e8d0;
+  --on-secondary-container: #0e1f10;
+  --tertiary: #8a5100;
+  --tertiary-container: #ffdcbe;
+  --on-tertiary-container: #2c1600;
+  --error: #ba1a1a;
+  --error-container: #ffdad6;
+
+  --bg: #f6fbf2;
+  --on-surface: #181d17;
+  --on-surface-variant: #424940;
+  --outline: #72796f;
+  --outline-variant: #c2c9bd;
+  --sc-low: #f0f5ec;
+  --sc: #eaefe6;
+  --sc-high: #e4eae1;
+  --sc-highest: #dfe4db;
+  --inverse-surface: #2d322c;
+  --inverse-on-surface: #eef2ea;
+
+  --card: #ffffff;              /* section cards on the page background */
+  --card-border: #e2e8dd;
+  --grid: rgba(66, 73, 64, 0.12);   /* chart grid lines */
+  --shadow: 0 1px 2px rgba(24, 29, 23, 0.05), 0 2px 8px rgba(24, 29, 23, 0.04);
+
+  /* Meter 3 on a multi-meter unit (meters 1 and 2 use primary / tertiary). */
+  --ch3: #2b5fa8;
+  /* Relay indicator: load on / AC cut / stale report / nothing reported. */
+  --relay-on: #1f9d3a;
+  --relay-off: #8c9388;
+  --relay-stale: #c08a00;
+  --relay-unknown: #c2c9bd;
+  --warn: #8a6100;
+  --warn-container: #ffefc2;
+
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 24px;
+
+  /* Older names, still used by the admin pages' own styles. */
+  --surface: var(--card);
+  --border: var(--outline-variant);
+  --text: var(--on-surface);
+  --muted: var(--on-surface-variant);
+  --primary-dim: var(--primary-container);
+  --accent: var(--tertiary);
+  --danger: var(--error);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #8cd88f;
+    --on-primary: #003915;
+    --primary-container: #005321;
+    --on-primary-container: #a8f4a9;
+    --secondary: #b7ccb4;
+    --secondary-container: #394b39;
+    --on-secondary-container: #d3e8d0;
+    --tertiary: #ffb870;
+    --tertiary-container: #693c00;
+    --on-tertiary-container: #ffdcbe;
+    --error: #ffb4ab;
+    --error-container: #93000a;
+
+    --bg: #101510;
+    --on-surface: #dfe4db;
+    --on-surface-variant: #c2c9bd;
+    --outline: #8c9388;
+    --outline-variant: #424940;
+    --sc-low: #181d17;
+    --sc: #1c211b;
+    --sc-high: #262b25;
+    --sc-highest: #313630;
+    --inverse-surface: #dfe4db;
+    --inverse-on-surface: #2d322c;
+
+    --card: #181d17;
+    --card-border: #262b25;
+    --grid: rgba(194, 201, 189, 0.12);
+    --shadow: none;
+
+    --ch3: #a9c7ff;
+    --relay-on: #6fdc85;
+    --relay-off: #8c9388;
+    --relay-stale: #f0c040;
+    --relay-unknown: #424940;
+    --warn: #f0c040;
+    --warn-container: #3d2f00;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -24,10 +113,10 @@ body {
      a bug, not a scroll affordance. Clip it rather than let the whole page
      slide sideways under the reader's thumb. */
   overflow-x: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  color: var(--text);
+  font-family: Roboto, "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  color: var(--on-surface);
   background: var(--bg);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 img, canvas, svg { max-width: 100%; }
@@ -35,156 +124,383 @@ img, canvas, svg { max-width: 100%; }
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-.topbar .brand { font-weight: 600; }
-.topbar .user { color: var(--muted); font-size: 0.9rem; }
+.ic { width: 1.25em; height: 1.25em; flex: none; }
 
-.container { padding: 1.25rem; max-width: 1100px; margin: 0 auto; }
+/* ---------- top bar ---------- */
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem 1.5rem;
+  flex-wrap: wrap;
+  max-width: 1100px; margin: 0 auto;
+  padding: 1rem 1.25rem 0.25rem;
+}
+.topbar .brand {
+  display: flex; align-items: center; gap: 0.65rem;
+  font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em;
+}
+.topbar .brand .logo {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--primary-container); color: var(--on-primary-container);
+}
+.topbar .brand .logo .ic { width: 22px; height: 22px; }
+.topbar .brand small { font-size: 0.85rem; font-weight: 500; color: var(--on-surface-variant); }
+.topbar .user {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+  color: var(--on-surface-variant); font-size: 0.9rem;
+}
+.topbar .user b { color: var(--on-surface); font-weight: 600; }
+.topbar .user .who { margin-right: 0.35rem; }
+/* Navigation links as tonal pills. */
+.topbar .user a {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.85rem; border-radius: 999px;
+  background: var(--secondary-container); color: var(--on-secondary-container);
+  font-weight: 500; font-size: 0.85rem;
+}
+.topbar .user a:hover { text-decoration: none; filter: brightness(0.97); }
+.topbar .user a .ic { width: 16px; height: 16px; }
+.topbar .user a.here { background: var(--primary); color: var(--on-primary); }
+
+.container { padding: 1rem 1.25rem 2rem; max-width: 1100px; margin: 0 auto; }
+
+/* ---------- cards and section titles ---------- */
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem 1.25rem;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--r-lg);
+  padding: 1.25rem 1.35rem;
   box-shadow: var(--shadow);
   margin-bottom: 1rem;
 }
-.card h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+.card h2 { margin: 0 0 0.85rem; font-size: 1.1rem; font-weight: 600; }
 
-.cards { display: grid; gap: 1rem; }
-.cards.stats { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+/* Heading with a tinted icon badge and an optional unit caption on the right. */
+.card h2.sec {
+  display: flex; align-items: center; gap: 0.7rem;
+}
+.card h2.sec .t { flex: 1 1 auto; min-width: 0; }
+.card h2.sec .cap { font-size: 0.75rem; font-weight: 500; color: var(--on-surface-variant); white-space: nowrap; }
+.badge {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.badge .ic { width: 18px; height: 18px; }
+.tint-primary   { color: var(--primary); }
+.tint-tertiary  { color: var(--tertiary); }
+.tint-secondary { color: var(--secondary); }
+
+/* ---------- stats ---------- */
+
+.cards { display: grid; gap: 0.85rem; }
+.cards.stats { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 1rem; }
 
 .stat {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem;
-  box-shadow: var(--shadow);
-  display: flex; flex-direction: column; gap: 0.25rem;
+  background: var(--sc-highest); color: var(--on-surface);
+  border-radius: var(--r-lg);
+  padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.35rem;
+  min-width: 0;
 }
-.stat span { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
-.stat .stat-val { display: flex; align-items: baseline; gap: 0.35rem; }
-.stat b    { font-size: 1.7rem; font-weight: 600; color: var(--primary); }
-.stat i    { font-style: normal; color: var(--muted); font-size: 0.85rem; }
+.stat .badge { width: 36px; height: 36px; margin-bottom: 0.35rem; background: color-mix(in srgb, currentColor 12%, transparent); }
+.stat .badge .ic { width: 20px; height: 20px; }
+.stat > span:not(.badge) { font-size: 0.8rem; font-weight: 600; opacity: 0.8; }
+.stat .stat-val { display: flex; align-items: baseline; gap: 0.3rem; min-width: 0; }
+.stat b {
+  font-size: 1.75rem; font-weight: 700; letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.stat i { font-style: normal; font-size: 0.9rem; font-weight: 500; opacity: 0.85; }
+/* Admin overview tiles put the number straight in the tile. */
+.stat > b { color: var(--primary); }
+.stat.tone-primary   { background: var(--primary-container);   color: var(--on-primary-container); }
+.stat.tone-tertiary  { background: var(--tertiary-container);  color: var(--on-tertiary-container); }
+.stat.tone-secondary { background: var(--secondary-container); color: var(--on-secondary-container); }
+
+/* ---------- controls ---------- */
 
 .controls {
   display: flex; flex-wrap: wrap; gap: 1rem; align-items: end;
 }
-.controls label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; color: var(--muted); }
-.controls select { padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; min-width: 220px; max-width: 100%; }
-.controls .last-sync { display: inline-flex; align-items: baseline; gap: 0.3rem; font-size: 0.8rem; color: var(--muted); }
-.controls .last-sync b { font-weight: 600; color: var(--text); }
-.controls .last-sync .rel { color: var(--muted); }
+.controls label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; font-weight: 500; color: var(--on-surface-variant); }
+.controls select { min-width: 240px; max-width: 100%; }
+/* Last sync gets a line of its own: a full-width flex item wraps onto the
+   next row whatever sits above it, so it doesn't crowd the range buttons or
+   shuffle around when the custom date filter opens. */
+.controls .last-sync { display: flex; flex: 0 0 100%; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--on-surface-variant); }
+.controls .last-sync .ic { width: 16px; height: 16px; }
+.controls .last-sync b { font-weight: 600; color: var(--on-surface); }
+.controls .last-sync .rel { color: var(--on-surface-variant); }
 
-.range-buttons { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+/* Fixed ranges as one segmented control; Custom as a chip beside it. */
+.range-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.range-buttons {
+  display: inline-flex; flex-wrap: nowrap;
+  border: 1px solid var(--outline); border-radius: 999px; overflow: hidden;
+}
 .range-buttons button {
-  padding: 0.4rem 0.85rem; border: 1px solid var(--border); background: var(--surface);
-  color: var(--text); /* override the dark-on-green default button color */
-  border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  padding: 0.5rem 1rem; min-height: 40px;
+  border: 0; border-left: 1px solid var(--outline); border-radius: 0;
+  background: transparent; color: var(--on-surface);
+  font-size: 0.875rem; font-weight: 500; white-space: nowrap; cursor: pointer;
 }
-.range-buttons button.on,
-.range-buttons button:hover {
-  background: var(--primary-dim); border-color: var(--primary); color: var(--primary);
+.range-buttons button:first-child { border-left: 0; }
+.range-buttons button:hover { background: color-mix(in srgb, var(--on-surface) 8%, transparent); filter: none; }
+.range-buttons button.on {
+  background: var(--secondary-container); color: var(--on-secondary-container); font-weight: 600;
 }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.45rem 0.9rem; min-height: 36px;
+  border: 1px solid var(--outline); border-radius: 999px;
+  background: transparent; color: var(--on-surface-variant);
+  font-size: 0.875rem; font-weight: 500; cursor: pointer;
+}
+.chip .ic { width: 16px; height: 16px; }
+.chip:hover { background: color-mix(in srgb, var(--on-surface) 8%, transparent); filter: none; }
+.chip.on, .chip.open { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+
+/* Dashboard: custom From/To range filter in the controls bar */
+.custom-range {
+  display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end;
+  flex: 0 0 100%;
+  padding: 0.85rem; border-radius: var(--r-md); background: var(--sc-low);
+}
+/* .custom-range sets display, which would override the hidden attribute. */
+.custom-range[hidden] { display: none; }
+
+/* Reports: the From/To hour pair. Grouping keeps them side by side with room
+   to breathe — on the shared select width the second one was pushed onto a
+   line of its own, away from its partner. */
+.hour-range { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+.hour-range select { min-width: 150px; }
+
+/* ---------- report: grand total + per-day chips ---------- */
+
+.totals-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 1rem; }
+.totals-head h2 { margin: 0; }
+.grand-total b { font-size: 1.6rem; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
+.grand-total i { font-style: normal; color: var(--on-surface-variant); font-size: 0.9rem; }
+.day-chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.6rem; }
+.day-chip {
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem; font-size: 0.85rem; color: var(--on-surface-variant);
+  background: var(--sc-high); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.day-chip b { color: var(--on-surface); font-weight: 600; margin-right: 0.25rem; }
+
+/* ---------- dashboard: meter span, readings table ---------- */
+
+/* "start reading -> end reading (+difference)" under the energy chart */
+.meter-span {
+  margin: 0.85rem 0 0; padding: 0.6rem 0.9rem;
+  border-radius: var(--r-md); background: var(--sc-high);
+  font-size: 0.92rem; color: var(--on-surface-variant);
+}
+.meter-span b { color: var(--on-surface); font-weight: 700; font-variant-numeric: tabular-nums; }
+.meter-span .gen { color: var(--primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+.meter-span:empty { display: none; }
+
+table.grid.readings th:not(:first-child),
+table.grid.readings td:not(:first-child) { text-align: right; }
+table.grid.readings td.gen { font-weight: 600; color: var(--primary); }
+table.grid.readings .lbl-short, .range-buttons .lbl-short { display: none; }
+table.grid.readings tfoot th {
+  background: var(--secondary-container); color: var(--on-secondary-container);
+  border-bottom: none; text-transform: none; letter-spacing: 0; font-size: 0.9rem; font-weight: 700;
+}
+table.grid.readings tfoot th:first-child { border-radius: var(--r-sm) 0 0 var(--r-sm); }
+table.grid.readings tfoot th:last-child  { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+table.grid.readings tfoot th#readings-total {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+table.grid.readings tbody tr:last-child td { border-bottom: none; }
+
+/* ---------- buttons and fields ---------- */
 
 button {
-  background: var(--primary); color: white; border: none; padding: 0.45rem 0.9rem;
-  border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+  background: var(--primary); color: var(--on-primary); border: none;
+  padding: 0.55rem 1.2rem; min-height: 40px;
+  border-radius: 999px; cursor: pointer; font-size: 0.9rem; font-weight: 600;
+  font-family: inherit;
 }
-button:hover { filter: brightness(1.05); }
-button.danger { background: var(--danger); }
+button:hover { filter: brightness(1.08); }
+button.danger { background: var(--error); color: #fff; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-input[type=text], input[type=password], input[type=email], input[type=number], input:not([type]), select {
-  padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem;
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px;
 }
+
+input[type=text], input[type=password], input[type=email], input[type=number],
+input[type=date], input[type=month], input:not([type]), select {
+  padding: 0.55rem 0.8rem; min-height: 42px;
+  border: 1px solid var(--outline); border-radius: var(--r-sm);
+  background: var(--card); color: var(--on-surface);
+  font-size: 0.95rem; font-family: inherit;
+}
+input:focus, select:focus { border-color: var(--primary); }
 
 .inline-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .inline-form input, .inline-form select { min-width: 0; }
-.inline-form .check { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--muted); }
+.inline-form .check { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--on-surface-variant); }
 
-table.grid { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-table.grid th, table.grid td { padding: 0.5rem 0.6rem; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--border); }
-table.grid th { background: #f1f3ef; color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+/* ---------- tables ---------- */
+
+table.grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.9rem; }
+table.grid th, table.grid td {
+  padding: 0.6rem 0.7rem; text-align: left; vertical-align: middle;
+  border-bottom: 1px solid color-mix(in srgb, var(--outline-variant) 60%, transparent);
+}
+table.grid thead th {
+  background: var(--sc-high); color: var(--on-surface-variant);
+  font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+  border-bottom: none;
+}
+table.grid thead th:first-child { border-radius: var(--r-sm) 0 0 var(--r-sm); }
+table.grid thead th:last-child  { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+table.grid tbody tr:hover td { background: color-mix(in srgb, var(--primary) 5%, transparent); }
 table.grid .actions { white-space: nowrap; display: flex; gap: 0.4rem; align-items: center; }
-table.grid input { font-size: 0.85rem; padding: 0.3rem 0.5rem; }
-table.grid .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+table.grid input { font-size: 0.85rem; padding: 0.3rem 0.5rem; min-height: 34px; }
+table.grid .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.84rem; }
 
 .status-ok       { color: var(--primary); }
 .status-error,
 .status-db_error,
 .status-invalid_json,
-.status-missing_fields { color: var(--danger); }
+.status-missing_fields { color: var(--error); }
 
-.muted { color: var(--muted); font-size: 0.9rem; }
-.error { color: var(--danger); font-weight: 500; margin: 0 0 0.75rem; }
+.muted { color: var(--on-surface-variant); font-size: 0.88rem; }
+.card > p.muted { margin: -0.35rem 0 0.85rem; }
+.error {
+  color: var(--error); font-weight: 500; margin: 0 0 0.85rem;
+  padding: 0.55rem 0.8rem; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
 
-/* Login screen */
-body.auth { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg); padding: 1rem; }
+/* ---------- sign-in ---------- */
+
+body.auth { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 1rem; }
 @supports (min-height: 100dvh) { body.auth { min-height: 100dvh; } }
-.card.login { width: 320px; max-width: 100%; }
-.card.login h1 { margin: 0 0 1rem; font-size: 1.3rem; color: var(--primary); text-align: center; }
-.card.login label { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.85rem; }
+.card.login { width: 360px; max-width: 100%; padding: 2rem 1.75rem 1.75rem; }
+.card.login .logo {
+  display: flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px; margin: 0 auto 0.75rem; border-radius: 50%;
+  background: var(--primary-container); color: var(--on-primary-container);
+}
+.card.login .logo .ic { width: 28px; height: 28px; }
+.card.login h1 { margin: 0 0 1.25rem; font-size: 1.4rem; font-weight: 700; text-align: center; }
+.card.login label { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.9rem; font-size: 0.85rem; font-weight: 500; color: var(--on-surface-variant); }
 .card.login input { width: 100%; }
-.card.login button { width: 100%; padding: 0.6rem; font-size: 1rem; }
-
-/* Charts. Chart.js keeps the canvas's own width/height attribute ratio when
-   `responsive` is on, which squashes a 300x120 canvas into a ~120px-tall strip
-   on a phone. Give the canvas a sized wrapper instead and pair this with
-   maintainAspectRatio:false so the chart fills a height we control per
-   breakpoint. */
-.chart-wrap        { position: relative; width: 100%; height: 300px; }
-.chart-wrap.tall   { height: 360px; }
-.chart-wrap canvas { display: block; }
+.card.login button { width: 100%; padding: 0.7rem; font-size: 1rem; margin-top: 0.35rem; }
 
 /* Empty-state */
-.empty { text-align: center; color: var(--muted); padding: 2rem; }
+.empty { text-align: center; color: var(--on-surface-variant); padding: 2rem; }
 
 /* Wide tables: let the user scroll horizontally instead of squishing cells. */
 .card.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 table.grid input, table.grid select { max-width: 100%; min-width: 0; }
 
+/* Charts with a fixed height (Chart.js maintainAspectRatio: false fills it).
+   A width-derived height left phones a sliver of plot area. */
+.chart-box { position: relative; height: 380px; }
+.chart-box.sm { height: 280px; }
+
+
+/* ---------- relay indicator (dashboard controls + admin devices) ---------- */
+
+.relay-state {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.75rem; border-radius: 999px;
+  background: var(--sc-high); font-size: 0.82rem; color: var(--on-surface-variant);
+}
+.relay-state .relay-label { color: var(--on-surface); font-weight: 600; }
+.relay-row { display: flex; flex: 0 0 100%; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
+.relay-row .relay-title { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--on-surface-variant); }
+.relay-row .relay-title .ic { width: 16px; height: 16px; }
+.relay-dot {
+  display: inline-block; flex: none; width: 0.62rem; height: 0.62rem; border-radius: 50%;
+  background: var(--relay-unknown);
+}
+.relay-dot.on      { background: var(--relay-on); box-shadow: 0 0 0 3px color-mix(in srgb, var(--relay-on) 22%, transparent); }
+.relay-dot.off     { background: var(--relay-off); }
+.relay-dot.stale   { background: var(--relay-stale); }
+.relay-dot.unknown { background: var(--relay-unknown); }
+
+/* Per-meter breakdown tiles (multi-meter devices, combined view). */
+.stat .meter-name { display: inline-flex; align-items: center; gap: 0.4rem; }
+.stat .meter-name .swatch { width: 0.65rem; height: 0.65rem; border-radius: 50%; flex: none; }
+.stat .meter-sub { font-size: 0.8rem; color: var(--on-surface-variant); }
+
+/* Reports: one chip per day with the line's colour. */
+.day-chip .dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-right: 0.35rem; vertical-align: middle; }
+
+/* The older fixed-height chart wrapper, still used by a few pages. */
+.chart-wrap        { position: relative; width: 100%; height: 300px; }
+.chart-wrap.tall   { height: 360px; }
+.chart-wrap canvas { display: block; }
+
 /* ---------- Mobile reflow ---------- */
 @media (max-width: 640px) {
-  .container       { padding: 0.75rem; }
-  .card            { padding: 0.75rem 0.85rem; border-radius: 6px; }
+  .container       { padding: 0.5rem 0.75rem 1.5rem; }
+  .card            { padding: 1rem; border-radius: 20px; }
 
-  .topbar          { flex-direction: column; align-items: flex-start; gap: 0.35rem; padding: 0.65rem 0.85rem; }
+  .topbar          { flex-direction: column; align-items: flex-start; gap: 0.6rem; padding: 0.85rem 0.85rem 0.25rem; }
+  .topbar .brand   { font-size: 1.2rem; }
   .topbar .user    { font-size: 0.85rem; }
+  .topbar .user .who { flex: 0 0 100%; }
 
-  .controls        { flex-direction: column; align-items: stretch; gap: 0.65rem; }
+  .controls        { flex-direction: column; align-items: stretch; gap: 0.75rem; }
   .controls label  { width: 100%; }
   .controls select { width: 100%; min-width: 0; }
-  .range-buttons   { width: 100%; }
-  .range-buttons button { flex: 1 1 30%; min-width: 0; padding: 0.45rem 0.4rem; font-size: 0.85rem; }
+  .range-row       { width: 100%; }
+  .range-buttons   { display: flex; width: 100%; }
+  .range-buttons button { flex: 1 1 0; min-width: 0; padding: 0.5rem 0.3rem; font-size: 0.8rem; }
+
+  .custom-range        { width: 100%; }
+  .custom-range label  { flex: 1 1 45%; }
+  .custom-range input  { width: 100%; }
+  .custom-range button { flex: 1 1 100%; }
+
+  .hour-range          { width: 100%; }
+  .hour-range label    { flex: 1 1 45%; }
+  .hour-range select   { width: 100%; min-width: 0; }
 
   .cards.stats     { grid-template-columns: 1fr 1fr; gap: 0.65rem; }
-  .stat            { padding: 0.75rem; }
+  .stat            { padding: 0.85rem; border-radius: 20px; }
   .stat b          { font-size: 1.35rem; }
+  .stat b.long     { font-size: 1.1rem; }
 
   .card h2         { font-size: 1rem; }
+  .chart-box       { height: 340px; }
+  .chart-box.sm    { height: 240px; }
 
   /* Tables that don't already opt-in to scroll-x: wrap their parent .card. */
   .card > table.grid { display: block; overflow-x: auto; white-space: nowrap; }
-  .inline-form     { flex-direction: column; align-items: stretch; }
-  /* Text fields fill the column, but a stretched checkbox renders its box
-     centred in a full-width slot and shoves its label to the far edge. */
-  .inline-form input:not([type=checkbox]):not([type=radio]),
-  .inline-form button { width: 100%; }
-  .inline-form .check { width: 100%; }
 
+  /* Meter readings: four narrow columns fit a phone, so keep it a real
+     table at full width (no sideways scroll hiding End / Generated). */
+  .card > table.grid.readings { display: table; white-space: normal; }
+  table.grid.readings th, table.grid.readings td { padding: 0.5rem 0.3rem; }
+  table.grid.readings th { font-size: 0.68rem; letter-spacing: 0.02em; }
+  table.grid.readings td:first-child { font-size: 0.8rem; }
+  table.grid.readings .mono { font-size: 0.74rem; white-space: nowrap; }
+  table.grid.readings .lbl-full,  .range-buttons .lbl-full  { display: none; }
+  table.grid.readings .lbl-short, .range-buttons .lbl-short { display: inline; }
+  .inline-form     { flex-direction: column; align-items: stretch; }
+  .inline-form input, .inline-form button { width: 100%; }
+
+  /* Status rows in the controls: wrap, never stretch into a column. */
+  .relay-row       { gap: 0.4rem; }
   .chart-wrap      { height: 240px; }
   .chart-wrap.tall { height: 300px; }
 
-  /* The top bar's link run is a row of tap targets, not a sentence — let it
-     wrap and give each link room for a fingertip. */
-  .topbar .user    { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.3rem; }
-  .topbar .user a  { padding: 0.25rem 0.1rem; }
+  /* Text fields fill the column, but a stretched checkbox renders its box
+     centred in a full-width slot and shoves its label to the far edge. */
+  .inline-form input[type=checkbox], .inline-form input[type=radio] { width: auto; }
+  .inline-form .check { width: 100%; }
 
   /* iOS Safari zooms the whole page in when a focused control's text is under
      16px, and never zooms back out. Every control on a phone gets 16px so
@@ -192,9 +508,4 @@ table.grid input, table.grid select { max-width: 100%; min-width: 0; }
   input:not([type=checkbox]):not([type=radio]), select, textarea,
   table.grid input, table.grid select,
   .field input, .field select { font-size: 16px; }
-
-  /* Fingertip-sized hit areas. 2.4rem ~= 38px, close to the 44px guidance
-     once the surrounding gap is counted. */
-  button, .range-buttons button { min-height: 2.4rem; }
-  input:not([type=checkbox]):not([type=radio]), select { min-height: 2.4rem; }
 }

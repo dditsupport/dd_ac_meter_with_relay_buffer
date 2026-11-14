@@ -11,8 +11,9 @@ import kotlinx.coroutines.flow.map
 
 /**
  * Persists cloud login choices across launches: base URL, last-used username,
- * device token (for BLE-relayed ingest POSTs). Passwords are not stored —
- * sessions are cookie-based, and re-login is required after expiry.
+ * device token (for BLE-relayed ingest POSTs). The password is NOT kept here:
+ * with "Remember me" it is stored encrypted by [CloudCredentialStore], and
+ * [com.dangeedums.acmeter.cloud.CloudSignIn] uses it to renew an expired session.
  */
 class CloudSessionStore(private val store: DataStore<Preferences>) {
     private val keyBaseUrl   = stringPreferencesKey("cloud_base_url")
