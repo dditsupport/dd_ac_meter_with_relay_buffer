@@ -367,8 +367,8 @@
 // Board layout (FW 2.1.0+ PCB): RTC, LED, relay and coin-cell sense sit on
 // consecutive pins of the RIGHT header, top to bottom:
 //   pin 10 = GPIO39  coin-cell sense (input-only, ADC1)
-//   pin 12 = GPIO32  I2C SCL
-//   pin 14 = GPIO33  I2C SDA
+//   pin 12 = GPIO32  I2C SDA
+//   pin 14 = GPIO33  I2C SCL
 //   pin 16 = GPIO26  status LED
 //   pin 18 = GPIO13  relay
 // Older boards (FW <= 2.0.0) used SDA 4, SCL 15, LED 2, relay 26, coin-cell 35:
@@ -377,8 +377,8 @@
 #define PIN_PZEM_TX             17        // ESP32 TX2 -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_I2C_SDA             33        // DS1307 SDA — plain I/O, not a strapping pin
-#define PIN_I2C_SCL             32        // DS1307 SCL — plain I/O, not a strapping pin
+#define PIN_I2C_SDA             32        // DS1307 SDA — plain I/O, not a strapping pin
+#define PIN_I2C_SCL             33        // DS1307 SCL — plain I/O, not a strapping pin
 // The DS1307 is a STANDARD-MODE part: 100 kHz max. (The DS3231 this build used
 // to carry tolerated 400 kHz; running the DS1307 that fast is out of spec.)
 #define I2C_FREQ_HZ             100000    // DS1307 is a standard-mode (100 kHz) part
