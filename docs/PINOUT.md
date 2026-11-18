@@ -143,8 +143,8 @@ The RTC, LED, relay and coin-cell sense sit on consecutive pins of the
 | TX (→ ESP32 RX2) | GPIO16 | right 20 | |
 | RX (← ESP32 TX2) | GPIO17 | right 22 | |
 | **DS1307 RTC (I²C)** | | | 100 kHz |
-| SDA | GPIO32 | right 12 | not a strapping pin |
-| SCL | GPIO33 | right 14 | not a strapping pin |
+| SDA | GPIO33 | right 14 | not a strapping pin |
+| SCL | GPIO32 | right 12 | not a strapping pin |
 | **CR2032 coin-cell sense** | GPIO39 | right 10 | input-only ADC1_CH3; via a ½ divider (~1.5 V at the pin), `COINCELL_DIVIDER_RATIO 2.0` |
 | **Status LED (external)** | GPIO26 | right 16 | GPIO26 → resistor (~330 Ω) → LED → GND, active-high |
 | **AC-cutoff relay** (PC817 input) | GPIO13 | right 18 | active-low: LOW = energize = cut AC |
