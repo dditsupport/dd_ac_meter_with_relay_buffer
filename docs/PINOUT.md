@@ -131,30 +131,35 @@ Unused and available (all non-strapping unless noted):
 # Pinout — ESP32 WROOM DevKit V1 (single meter)
 
 Applies to `firmware/esp32.WROOM.DevKit.V1_ds1307_ac_energy_meter/`,
-**FW 2.1.0 and later** (30-pin DevKit V1). The dual-PZEM build has its own pin
+**FW 2.2.0 and later**, on the grouped-module PCB
+(`hardware/esp32_module_grouped*.dip`). The dual-PZEM build has its own pin
 map in its `config.h`. Never use GPIO 6..11 (SPI flash).
 
-The RTC, LED, relay and coin-cell sense sit on consecutive pins of the
-**right header**, top to bottom: pins 10 / 12 / 14 / 16 / 18.
+> **Silkscreen error on this PCB:** the labels **32** and **35** are swapped.
+> The pad printed **"35"** (pad 13) is really **GPIO32**, and the pad printed
+> **"32"** (pad 12) is really **GPIO35**, which is input-only. Never route an
+> output to the pad printed "32". The firmware always uses the real GPIO.
 
-| Peripheral pin | ESP32 GPIO | Header pin | Notes |
-|---|---|---|---|
-| **PZEM-004T v3.0** | | | UART2 (`Serial2`) |
-| TX (→ ESP32 RX2) | GPIO16 | right 20 | |
-| RX (← ESP32 TX2) | GPIO17 | right 22 | |
-| **DS1307 RTC (I²C)** | | | 100 kHz |
-| SDA | GPIO32 | right 12 | not a strapping pin |
-| SCL | GPIO33 | right 14 | not a strapping pin |
-| **CR2032 coin-cell sense** | GPIO39 | right 10 | input-only ADC1_CH3; via a ½ divider (~1.5 V at the pin), `COINCELL_DIVIDER_RATIO 2.0` |
-| **Status LED (external)** | GPIO26 | right 16 | GPIO26 → resistor (~330 Ω) → LED → GND, active-high |
-| **AC-cutoff relay** (PC817 input) | GPIO13 | right 18 | active-low: LOW = energize = cut AC |
-| BOOT button | GPIO0 | on-board | strapping pin, read only after boot |
+| Peripheral pin | Real GPIO | Pad | Silkscreen | Notes |
+|---|---|---|---|---|
+| **PZEM-004T v3.0** | | | | UART2 (`Serial2`) |
+| TX (→ ESP32 RX2) | GPIO16 | 20 | 16 | |
+| RX (← ESP32 TX2) | GPIO17 | 22 | 17 | |
+| **DS1307 RTC (I²C)** | | | | 100 kHz; pull-ups to 3.3 V |
+| SDA | GPIO25 | 15 | 25 | |
+| SCL | GPIO32 | 13 | **35** (mislabelled) | |
+| **CR2032 coin-cell sense** | GPIO36 | 9 | 36 | input-only ADC1_CH0; via a ½ divider (~1.5 V at the pin), `COINCELL_DIVIDER_RATIO 2.0` |
+| **Status LED (external)** | GPIO33 | 14 | 33 | GPIO33 → resistor (~330 Ω) → LED → GND, active-high |
+| **AC-cutoff relay** (PC817 input) | GPIO18 | 21 | 18 | active-low: LOW = energize = cut AC; no boot pulse |
+| BOOT button | GPIO0 | — | on-board | strapping pin, read only after boot |
 
-GPIO2 (the dev board's own blue LED) and GPIO15 are no longer used.
+Older boards use different pins and are not compatible with FW 2.2.0 — keep
+them on their own firmware or rewire them:
 
-Boards built for FW 2.0.0 and earlier used SDA 4, SCL 15, LED 2, relay 26 and
-coin-cell 35 (no divider). Flashing 2.1.0 onto one of those loses the RTC, LED
-and relay until it is rewired, so keep old boards on 2.0.0.
+| FW | SDA | SCL | LED | Relay | Coin-cell |
+|---|---|---|---|---|---|
+| ≤ 2.0.0 | 4 | 15 | 2 | 26 | 35 (no divider) |
+| 2.1.0 | 32 | 33 | 26 | 13 | 39 |
 
 If the reported `coincell_mv` is off by a fixed factor, set
 `COINCELL_DIVIDER_RATIO` in `config.h` to (R_top + R_bottom) / R_bottom for the
