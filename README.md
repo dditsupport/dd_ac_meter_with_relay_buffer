@@ -83,7 +83,7 @@ the same logic. The differences are hardware-driven:
 | Wi-Fi TX power | capped at 11 dBm (weak onboard LDO) | full 19.5 dBm |
 | PZEM UART | `Serial1` | `Serial2` |
 | Pin map | C3 pins | ESP32 pins; GPIO 6..11 reserved for SPI flash |
-| RTC / LED / relay / coin-cell | I²C 6/5, LED 7, relay 10, cell 3 | I²C SDA 25 / SCL 32, LED 33, relay 18, cell 36 (via ½ divider) — FW 2.2.0+, see [`docs/PINOUT.md`](docs/PINOUT.md) |
+| RTC / LED / relay / coin-cell | I²C 6/5, LED 7, relay 10, cell 3 | I²C SDA 25 / SCL 32, LED 33, relay 18, cell 34 (via ½ divider) — FW 2.2.0+, see [`docs/PINOUT.md`](docs/PINOUT.md) |
 | PZEM meters | 1 | 1, or **2** with the dual-PZEM build |
 
 TX power is runtime-settable over BLE on both boards, so either can be trimmed

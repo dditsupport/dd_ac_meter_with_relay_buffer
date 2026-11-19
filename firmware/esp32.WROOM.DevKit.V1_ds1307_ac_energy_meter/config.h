@@ -366,7 +366,7 @@
 //
 // Board layout (FW 2.2.0+ PCB, hardware/esp32_module_grouped*.dip). Numbers
 // below are REAL GPIOs; pad = module footprint pad:
-//   GPIO36  coin-cell sense (input-only, ADC1)   pad 9   silkscreen "36"
+//   GPIO34  coin-cell sense (input-only, ADC1)   pad 11  silkscreen "34"
 //   GPIO25  I2C SDA                              pad 15  silkscreen "25"
 //   GPIO32  I2C SCL                              pad 13  silkscreen "35" (!)
 //   GPIO33  status LED                           pad 14  silkscreen "33"
@@ -406,11 +406,10 @@
 // Averaged ADC read of the CR2032 coin cell that backs up the DS1307 RTC,
 // reported on each ingest POST as `coincell_mv` (millivolts) alongside
 // wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
-// lost. GPIO36 (SENSOR_VP) is an input-only ADC1 channel (ADC1_CH0) on the
-// WROOM DevKit V1 — it can't drive anything, so it's an ideal pure sense line,
-// and being on ADC1 means Wi-Fi doesn't disturb the reading. (GPIO36/39 have an
-// ESP32 erratum — a brief glitch when Wi-Fi/ADC powers up — that only affects
-// interrupts, not this averaged analogReadMilliVolts() read.)
+// lost. GPIO34 is an input-only ADC1 channel (ADC1_CH6) on the WROOM DevKit
+// V1 — it can't drive anything, so it's an ideal pure sense line, and being on
+// ADC1 means Wi-Fi doesn't disturb the reading. (Chosen over GPIO36/39, which
+// carry an ESP32 start-up glitch erratum.)
 //
 // The board senses the cell through a voltage DIVIDER: ~1.5 V at the pin for a
 // ~3.0 V CR2032, i.e. a 1/2 divider. COINCELL_DIVIDER_RATIO scales the pin
@@ -419,7 +418,7 @@
 // equal resistors; change it if the board's resistors differ. ADC_11db
 // (~0-3.1 V) is kept: 1.0-1.65 V at the pin sits well inside it, whereas 6 dB
 // (~1.75 V max) would leave too little headroom for a fresh 3.3 V cell.
-#define PIN_COINCELL_ADC        36
+#define PIN_COINCELL_ADC        34
 #define COINCELL_DIVIDER_RATIO  2.0f
 #define COINCELL_ADC_SAMPLES    16
 

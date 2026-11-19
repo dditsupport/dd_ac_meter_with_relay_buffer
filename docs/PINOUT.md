@@ -148,7 +148,7 @@ map in its `config.h`. Never use GPIO 6..11 (SPI flash).
 | **DS1307 RTC (I²C)** | | | | 100 kHz; pull-ups to 3.3 V |
 | SDA | GPIO25 | 15 | 25 | |
 | SCL | GPIO32 | 13 | **35** (mislabelled) | |
-| **CR2032 coin-cell sense** | GPIO36 | 9 | 36 | input-only ADC1_CH0; via a ½ divider (~1.5 V at the pin), `COINCELL_DIVIDER_RATIO 2.0` |
+| **CR2032 coin-cell sense** | GPIO34 | 11 | 34 | input-only ADC1_CH6; via a ½ divider (~1.5 V at the pin), `COINCELL_DIVIDER_RATIO 2.0` |
 | **Status LED (external)** | GPIO33 | 14 | 33 | GPIO33 → resistor (~330 Ω) → LED → GND, active-high |
 | **AC-cutoff relay** (PC817 input) | GPIO18 | 21 | 18 | active-low: LOW = energize = cut AC; no boot pulse |
 | BOOT button | GPIO0 | — | on-board | strapping pin, read only after boot |
