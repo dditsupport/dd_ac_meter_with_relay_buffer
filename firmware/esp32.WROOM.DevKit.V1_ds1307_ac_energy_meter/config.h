@@ -367,10 +367,12 @@
 // Board layout (FW 2.2.0+ PCB, hardware/esp32_module_grouped*.dip). Numbers
 // below are REAL GPIOs; pad = module footprint pad:
 //   GPIO34  coin-cell sense (input-only, ADC1)   pad 11  silkscreen "34"
-//   GPIO25  I2C SDA                              pad 15  silkscreen "25"
+//   GPIO13  I2C SDA                              pad 18  silkscreen "13"
 //   GPIO32  I2C SCL                              pad 13  silkscreen "35" (!)
 //   GPIO33  status LED                           pad 14  silkscreen "33"
-//   GPIO18  relay                                pad 21  silkscreen "18"
+//   GPIO25  relay                                pad 15  silkscreen "25"
+// SDA and SCL are on opposite headers: route them as a pair and keep them away
+// from the relay trace — contactor switching noise near I2C upsets the RTC.
 // (!) The silkscreen labels for 32 and 35 are SWAPPED on this PCB: the pad
 // printed "35" is really GPIO32 (SCL is routed there), and the pad printed "32"
 // is really GPIO35, which is INPUT-ONLY — never route an output to it.
@@ -384,7 +386,7 @@
 #define PIN_PZEM_TX             17        // ESP32 TX2 -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_I2C_SDA             25        // DS1307 SDA — plain I/O, not a strapping pin
+#define PIN_I2C_SDA             13        // DS1307 SDA — plain I/O, not a strapping pin (also JTAG TCK; irrelevant without a debugger)
 #define PIN_I2C_SCL             32        // DS1307 SCL — plain I/O; its pad is mislabelled "35" (see above)
 // The DS1307 is a STANDARD-MODE part: 100 kHz max. (The DS3231 this build used
 // to carry tolerated 400 kHz; running the DS1307 that fast is out of spec.)
@@ -444,9 +446,10 @@
 // server per device (relay_schedule / relay_compressor_watts / relay_grace_min)
 // and cached in NVS so cutoff keeps working through a Wi-Fi outage. The values
 // here are only defaults until the server pushes real ones.
-// GPIO18: not a strapping pin and drives nothing during boot, so the relay
-// stays de-energized (AC on) until relay::begin() takes the pin.
-#define PIN_RELAY               18
+// GPIO25: not a strapping pin, no pull and no output during boot, so the relay
+// stays de-energized (AC on) until relay::begin() takes the pin. (Its DAC is
+// never enabled by this firmware.)
+#define PIN_RELAY               25
 #define RELAY_ACTIVE_HIGH       0
 
 // Compressor "is-running" watt threshold: below it the compressor is off, so

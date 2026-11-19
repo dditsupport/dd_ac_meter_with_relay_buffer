@@ -146,11 +146,11 @@ map in its `config.h`. Never use GPIO 6..11 (SPI flash).
 | TX (→ ESP32 RX2) | GPIO16 | 20 | 16 | |
 | RX (← ESP32 TX2) | GPIO17 | 22 | 17 | |
 | **DS1307 RTC (I²C)** | | | | 100 kHz; pull-ups to 3.3 V |
-| SDA | GPIO25 | 15 | 25 | |
+| SDA | GPIO13 | 18 | 13 | |
 | SCL | GPIO32 | 13 | **35** (mislabelled) | |
 | **CR2032 coin-cell sense** | GPIO34 | 11 | 34 | input-only ADC1_CH6; via a ½ divider (~1.5 V at the pin), `COINCELL_DIVIDER_RATIO 2.0` |
 | **Status LED (external)** | GPIO33 | 14 | 33 | GPIO33 → resistor (~330 Ω) → LED → GND, active-high |
-| **AC-cutoff relay** (PC817 input) | GPIO18 | 21 | 18 | active-low: LOW = energize = cut AC; no boot pulse |
+| **AC-cutoff relay** (PC817 input) | GPIO25 | 15 | 25 | active-low: LOW = energize = cut AC; no pull or pulse at boot |
 | BOOT button | GPIO0 | — | on-board | strapping pin, read only after boot |
 
 Older boards use different pins and are not compatible with FW 2.2.0 — keep
