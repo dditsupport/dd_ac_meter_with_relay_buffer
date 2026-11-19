@@ -6,7 +6,7 @@
 // energized INSIDE the window. It also adds compressor-aware, fail-safe NC
 // cutoff (see the Relay output section). The backend uses this version to
 // warn about 1.x devices still running the old, inverted convention.
-#define FW_VERSION              "2.1.0"
+#define FW_VERSION              "2.2.0"
 
 // ---------- Backend ----------
 // The ingest endpoint URL is split into two parts:
@@ -364,32 +364,39 @@
 // in use is GPIO 0 (BOOT button, read only after boot). GPIO 2 (on-board LED)
 // and GPIO 15 are left free.
 //
-// Board layout (FW 2.1.0+ PCB): RTC, LED, relay and coin-cell sense sit on
-// consecutive pins of the RIGHT header, top to bottom:
-//   pin 10 = GPIO39  coin-cell sense (input-only, ADC1)
-//   pin 12 = GPIO32  I2C SDA
-//   pin 14 = GPIO33  I2C SCL
-//   pin 16 = GPIO26  status LED
-//   pin 18 = GPIO13  relay
-// Older boards (FW <= 2.0.0) used SDA 4, SCL 15, LED 2, relay 26, coin-cell 35:
-// flashing this build onto one loses the RTC, LED and relay until it is rewired.
+// Board layout (FW 2.2.0+ PCB, hardware/esp32_module_grouped*.dip). Numbers
+// below are REAL GPIOs; pad = module footprint pad:
+//   GPIO34  coin-cell sense (input-only, ADC1)   pad 11  silkscreen "34"
+//   GPIO25  I2C SDA                              pad 15  silkscreen "25"
+//   GPIO32  I2C SCL                              pad 13  silkscreen "35" (!)
+//   GPIO33  status LED                           pad 14  silkscreen "33"
+//   GPIO18  relay                                pad 21  silkscreen "18"
+// (!) The silkscreen labels for 32 and 35 are SWAPPED on this PCB: the pad
+// printed "35" is really GPIO32 (SCL is routed there), and the pad printed "32"
+// is really GPIO35, which is INPUT-ONLY — never route an output to it.
+// Firmware always uses the real GPIO number.
+//
+// Older boards are NOT compatible — flashing this build onto one loses the RTC,
+// LED and relay until it is rewired:
+//   FW <= 2.0.0: SDA 4,  SCL 15, LED 2,  relay 26, coin-cell 35
+//   FW    2.1.0: SDA 32, SCL 33, LED 26, relay 13, coin-cell 39
 #define PIN_PZEM_RX             16        // ESP32 RX2 <- PZEM TX
 #define PIN_PZEM_TX             17        // ESP32 TX2 -> PZEM RX
 #define PZEM_BAUD               9600
 
-#define PIN_I2C_SDA             32        // DS1307 SDA — plain I/O, not a strapping pin
-#define PIN_I2C_SCL             33        // DS1307 SCL — plain I/O, not a strapping pin
+#define PIN_I2C_SDA             25        // DS1307 SDA — plain I/O, not a strapping pin
+#define PIN_I2C_SCL             32        // DS1307 SCL — plain I/O; its pad is mislabelled "35" (see above)
 // The DS1307 is a STANDARD-MODE part: 100 kHz max. (The DS3231 this build used
 // to carry tolerated 400 kHz; running the DS1307 that fast is out of spec.)
 #define I2C_FREQ_HZ             100000    // DS1307 is a standard-mode (100 kHz) part
 #define RTC_WRITEBACK_DRIFT_SEC 2         // skip RTC writeback if NTP within this
 
 // ---------- Status LED ----------
-// Wi-Fi activity indicator. An EXTERNAL LED on GPIO26 (the dev board's own
-// GPIO2 LED is no longer used), wired GPIO26 -> resistor -> LED -> GND, so it
+// Wi-Fi activity indicator. An EXTERNAL LED on GPIO33 (the dev board's own
+// GPIO2 LED is no longer used), wired GPIO33 -> resistor -> LED -> GND, so it
 // lights when the pin is HIGH: LED_ACTIVE_HIGH 1. Set it to 0 for the other
-// wiring (3V3 -> resistor -> LED -> GPIO26).
-#define PIN_STATUS_LED          26
+// wiring (3V3 -> resistor -> LED -> GPIO33).
+#define PIN_STATUS_LED          33
 #define LED_ACTIVE_HIGH         1
 #define LED_BLINK_SEARCH_MS     150       // toggle period while Wi-Fi disconnected
 #define LED_BLINK_TX_MS         60        // toggle period during a data POST
@@ -399,9 +406,10 @@
 // Averaged ADC read of the CR2032 coin cell that backs up the DS1307 RTC,
 // reported on each ingest POST as `coincell_mv` (millivolts) alongside
 // wifi_rssi and rtc_drift so a dying cell can be spotted before the clock is
-// lost. GPIO39 (SENSOR_VN) is an input-only ADC1 channel (ADC1_CH3) on the
-// WROOM DevKit V1 — it can't drive anything, so it's an ideal pure sense line,
-// and being on ADC1 means Wi-Fi doesn't disturb the reading.
+// lost. GPIO34 is an input-only ADC1 channel (ADC1_CH6) on the WROOM DevKit
+// V1 — it can't drive anything, so it's an ideal pure sense line, and being on
+// ADC1 means Wi-Fi doesn't disturb the reading. (Chosen over GPIO36/39, which
+// carry an ESP32 start-up glitch erratum.)
 //
 // The board senses the cell through a voltage DIVIDER: ~1.5 V at the pin for a
 // ~3.0 V CR2032, i.e. a 1/2 divider. COINCELL_DIVIDER_RATIO scales the pin
@@ -410,7 +418,7 @@
 // equal resistors; change it if the board's resistors differ. ADC_11db
 // (~0-3.1 V) is kept: 1.0-1.65 V at the pin sits well inside it, whereas 6 dB
 // (~1.75 V max) would leave too little headroom for a fresh 3.3 V cell.
-#define PIN_COINCELL_ADC        39
+#define PIN_COINCELL_ADC        34
 #define COINCELL_DIVIDER_RATIO  2.0f
 #define COINCELL_ADC_SAMPLES    16
 
@@ -436,9 +444,9 @@
 // server per device (relay_schedule / relay_compressor_watts / relay_grace_min)
 // and cached in NVS so cutoff keeps working through a Wi-Fi outage. The values
 // here are only defaults until the server pushes real ones.
-// GPIO13: not a strapping pin and drives nothing during boot, so the relay
+// GPIO18: not a strapping pin and drives nothing during boot, so the relay
 // stays de-energized (AC on) until relay::begin() takes the pin.
-#define PIN_RELAY               13
+#define PIN_RELAY               18
 #define RELAY_ACTIVE_HIGH       0
 
 // Compressor "is-running" watt threshold: below it the compressor is off, so
