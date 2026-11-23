@@ -277,6 +277,8 @@ if ($sync_epoch === null) {
 
 $inserted  = 0;
 $max_seq   = 0;
+// Readings dropped as physically impossible, by reason (see reading_implausible()).
+$skipped   = [];
 $collision = null;   // [seq, channel] of the first seq collision, if any
 $pdo->beginTransaction();
 try {
@@ -320,6 +322,16 @@ try {
         $t   = (int)($r['t'] ?? 0);
         $t_ok = $t >= MIN_PLAUSIBLE_EPOCH && $t <= time() + 86400;
         if ($seq <= 0 || $bid <= 0) continue;
+
+        // Impossible readings (garbage off a noisy PZEM link) are not stored,
+        // but their seq is still acknowledged so the device drops them from its
+        // buffer instead of re-sending them on every sync.
+        $why = reading_implausible($r);
+        if ($why !== null) {
+            $skipped[$why] = ($skipped[$why] ?? 0) + 1;
+            if ($seq > $max_seq) $max_seq = $seq;
+            continue;
+        }
 
         if ($bid === $current_bid && isset($offsets[$bid])) {
             // Current boot: uptime is continuous up to sync_wall_time, so the
@@ -414,7 +426,14 @@ try {
     json_response(500, ['ok' => false, 'error' => 'server_error']);
 }
 
-log_ingest($device_id, count($readings), $inserted, 'ok', null);
+// e.g. "skipped 3 implausible (voltage 2, frequency 1)"
+$skip_note = null;
+if ($skipped) {
+    $parts = [];
+    foreach ($skipped as $why => $n) $parts[] = "$why $n";
+    $skip_note = 'skipped ' . array_sum($skipped) . ' implausible (' . implode(', ', $parts) . ')';
+}
+log_ingest($device_id, count($readings), $inserted, 'ok', $skip_note);
 
 // Effective log_interval_sec: device override -> global default -> 0 (= omit field)
 $st = $pdo->prepare('SELECT log_interval_sec FROM ed_device_meta WHERE device_id = ?');
