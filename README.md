@@ -84,69 +84,19 @@ the same logic. The differences are hardware-driven:
 | PZEM UART | `Serial1` | `Serial2` |
 | Pin map | C3 pins | ESP32 pins; GPIO 6..11 reserved for SPI flash |
 | RTC / LED / relay / coin-cell | I²C 6/5, LED 7, relay 10, cell 3 | I²C SDA 13 / SCL 32, LED 33, relay 25, cell 34 (via ½ divider) — FW 2.2.0+, see [`docs/PINOUT.md`](docs/PINOUT.md) |
-| PZEM meters | 1 | 1, or **2** with the dual-PZEM build |
+| PZEM meters | 1 | 1 |
 
 TX power is runtime-settable over BLE on both boards, so either can be trimmed
 if a particular install proves marginal.
 
-### Dual-PZEM build (WROOM only)
+### Multi-meter support (server and app only)
 
-`esp32.WROOM.DevKit.V1_dual_pzem_ac_energy_meter/` (`FW_VERSION` **3.0.0**)
-reads **two** PZEM-004T meters from one ESP32 and reports both under a single
-`device_id`. Each meter gets its own hardware UART — channel 1 on UART2
-(GPIO 16/17), channel 2 on UART1 (GPIO 32/33) — because the TTL PZEM variant
-drives its TX line permanently and two of them on one UART would collide. Set
-`PZEM_CHANNELS` and the `PIN_PZEM*` / `PZEM*_ADDR` entries in `config.h`.
-
-Every reading carries a 1-based channel end to end:
-
-- log rows are `seq,ch,boot_id,sec,V,I,P,Wh,PF,Hz` — one sampling instant writes
-  one row **per channel**, all sharing `seq`, so seq-based acking still advances
-  both channels together;
-- the ingest POST tags each reading with `ch` and the device with
-  `channel_count`;
-- readings are keyed on `(device_id, seq, channel)` in the database.
-
-Each channel keeps independent totals, midnight anchors and fault status, so one
-dead meter never masks or blocks the other.
-
-**Two relays, one per PZEM.** Relay N (GPIO 26 for PZEM 1, GPIO 27 for PZEM 2)
-cuts the AC that meter N measures, and runs a fully independent open-hours
-schedule, cutoff state machine, manual override and NVS-cached config. The
-compressor-idle check for relay N looks only at channel N's wattage — that
-pairing is the point, since deciding relay 1 from meter 2's load would either
-hard-cut a running compressor or never cut at all. A failed read on a channel
-counts as "compressor may be running", so a dead meter is never mistaken for an
-idle one.
-
-Relay config is stored and pushed per channel:
-
-- `ed_device_relay_schedule` is keyed `(device_id, channel)`;
-- the ingest response carries `relay_channels: [{ch, version, schedule[],
-  compressor_watts, grace_min}, ...]` (the old flat `relay_*` fields are still
-  emitted from channel 1, and firmware that receives only those applies them to
-  every relay);
-- `/api/admin_relay.php` takes a `channel` parameter (default 1) on
-  `get` / `set` / `clear`, and the admin Devices page shows a relay picker
-  (hidden on single-relay devices) driven by the device's reported
-  `relay_count`;
-- the dashboard and reports take a `channel` too, with a **Meter** selector that
-  appears only for multi-meter devices. It defaults to **All meters**
-  (`channel=0`), which queries every meter and overlays them — one colour-coded
-  series per meter on both charts, a per-meter breakdown row, and combined
-  Current / Today / Peak / Period-total cards. Picking a single meter narrows to
-  that one. Reports instead offer **one meter at a time** with no combined
-  option — that chart's series are already days, so folding meters in would
-  multiply the lines or silently sum unrelated loads;
-- the Android app's Cloud tab gets a **Meter** chip row (shown only when the
-  server reports `channel_count > 1`) and charts one meter at a time, matching
-  the reports rather than the dashboard overlay;
-- the live relay indicator shows **one pill per relay** (`R1 LOAD ON`,
-  `R2 AC CUT`, …), backed by a new `ed_device_relay_state` table keyed
-  `(device_id, channel)` that ingest refreshes from the POST's `relays[]`;
-- over BLE, write `{"ch":1,"mode":"on"|"off"|"auto"}` to drive one relay —
-  omit `ch` to set them all — and reading returns
-  `{"relays":[{"ch":1,"mode":…,"energized":…}, …]}`.
+There is no dual-PZEM firmware any more; every build reads one PZEM and drives
+one relay. The backend and app still accept per-channel data (readings keyed on
+`(device_id, seq, channel)`, per-channel relay schedules and state, a **Meter**
+selector that only appears when a device reports `channel_count > 1`). Single-
+meter devices report channel 1, so this is inert unless multi-meter firmware is
+ever brought back.
 
 ### The device declares its own layout
 

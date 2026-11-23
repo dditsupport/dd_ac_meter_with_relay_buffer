@@ -132,8 +132,7 @@ Unused and available (all non-strapping unless noted):
 
 Applies to `firmware/esp32.WROOM.DevKit.V1_ds1307_ac_energy_meter/`,
 **FW 2.2.0 and later**, on the grouped-module PCB
-(`hardware/esp32_module_grouped*.dip`). The dual-PZEM build has its own pin
-map in its `config.h`. Never use GPIO 6..11 (SPI flash).
+(`hardware/esp32_module_grouped*.dip`). Never use GPIO 6..11 (SPI flash).
 
 > **Silkscreen error on this PCB:** the labels **32** and **35** are swapped.
 > The pad printed **"35"** (pad 13) is really **GPIO32**, and the pad printed

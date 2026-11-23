@@ -243,6 +243,36 @@ function energy_delta_wh(float $prev_wh, float $cur_wh, int $dt_sec): float {
     return $d > $limit ? 0.0 : $d;
 }
 
+/**
+ * Why a reading is physically impossible for a PZEM-004T-100A, or null when it
+ * is plausible. A noisy UART link has delivered values like 6,170 V, 1.3 MW,
+ * PF 9.999 and 243 Hz; stored as real rows they draw power spikes and fake
+ * counter resets. Firmware 2.1.0 (Super Mini) / 2.3.0 (WROOM) already drop
+ * these on the device; this also protects older firmware. Same limits as the
+ * firmware's PZEM_* constants in config.h — keep them in step.
+ */
+function reading_implausible(array $r): ?string {
+    $v  = (float)($r['V']  ?? 0);
+    $i  = (float)($r['I']  ?? 0);
+    $p  = (float)($r['P']  ?? 0);
+    $wh = (float)($r['Wh'] ?? 0);
+    $pf = (float)($r['PF'] ?? 0);
+    if ($v < 0 || $v > 300.0)                  return 'voltage';
+    if ($i < 0 || $i > 100.0)                  return 'current';
+    if ($p < 0 || $p > 23000.0)                return 'power';
+    // Real power can never exceed apparent power (5 % + 2 W for rounding).
+    if ($p > $v * $i * 1.05 + 2.0)             return 'power_gt_vi';
+    if ($pf < 0 || $pf > 1.001)                return 'power_factor';
+    if ($wh < 0 || $wh > PZEM_WH_ROLLOVER)     return 'energy';
+    // Frequency only means something with mains present; older firmware may
+    // omit it.
+    if (isset($r['Hz']) && $v >= 50.0) {
+        $hz = (float)$r['Hz'];
+        if ($hz < 45.0 || $hz > 65.0)          return 'frequency';
+    }
+    return null;
+}
+
 /* ---------- PDO singleton ---------- */
 function db(): PDO {
     static $pdo = null;

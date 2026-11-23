@@ -6,7 +6,7 @@
 // energized INSIDE the window. It also adds compressor-aware, fail-safe NC
 // cutoff (see the Relay output section). The backend uses this version to
 // warn about 1.x devices still running the old, inverted convention.
-#define FW_VERSION              "2.2.0"
+#define FW_VERSION              "2.3.0"
 
 // ---------- Backend ----------
 // The ingest endpoint URL is split into two parts:
@@ -259,6 +259,25 @@
 // cache so each retry forces a fresh transaction.
 #define PZEM_READ_ATTEMPTS      3
 #define PZEM_READ_RETRY_MS      250
+
+// ---------- PZEM plausibility gate ----------
+// A noisy UART link can deliver readings no PZEM can produce (thousands of
+// volts, megawatts, PF above 1, 243 Hz, a counter jumping by MWh). Logged as
+// real rows they show up as power spikes, push the relay's compressor-watt
+// check the wrong way, and look like a counter reset/swap on the server.
+// pzem::read() treats such a reading as a FAILED read: no row, and the next
+// sample tries again. Limits are the PZEM-004T-100A's own ratings plus margin.
+#define PZEM_V_MAX              300.0f    // V (the PZEM measures 80-260 V)
+#define PZEM_I_MAX_A            100.0f    // A (100 A model)
+#define PZEM_P_MAX_W            23000.0f  // W (the PZEM's 23 kW rating)
+#define PZEM_E_MAX_WH           9999990.0f // Wh: the counter rolls over at 9,999.99 kWh
+#define PZEM_HZ_MIN             45.0f     // Hz, checked only with voltage present
+#define PZEM_HZ_MAX             65.0f
+// Energy may rise no faster than PZEM_P_MAX_W since the last accepted reading
+// (+50 Wh). A bigger jump is accepted only once this many consecutive samples
+// repeat it (within 1 kWh): a genuine PZEM swap to a used meter repeats,
+// garbage does not. Drops are always accepted (Reset PZEM / swap / rollover).
+#define PZEM_JUMP_CONFIRM_READS 5
 
 // ---------- Boot-loop guard ----------
 #define BOOTLOOP_WINDOW_SEC     60
